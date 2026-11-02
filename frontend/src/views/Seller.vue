@@ -27,7 +27,7 @@ const blank = (): Form => ({
   title: '',
   description: '',
   brand: '',
-  category_id: 1,
+  category_id: 0, // 0 = not chosen yet; the form refuses to submit until a category is picked
   price: 10000,
   discount_pct: 0,
   free_shipping: false,
@@ -85,10 +85,11 @@ function edit(p: SellerProduct) {
 }
 function reset() {
   editingId.value = null
-  form.value = { ...blank(), category_id: categories.value[0]?.id ?? 1 }
+  form.value = blank()
 }
 const save = () =>
   guarded(async () => {
+    if (!form.value.category_id) throw new Error('Choose a category')
     const body = { ...form.value, discount_pct: form.value.discount_pct / 100 }
     if (editingId.value === null) {
       const { is_active: _ignored, ...create } = body
@@ -167,6 +168,7 @@ onMounted(async () => {
         <textarea v-model="form.description" placeholder="Description" rows="2" class="input" />
         <input v-model="form.brand" required placeholder="Brand" class="input" />
         <select v-model.number="form.category_id" class="input">
+          <option :value="0" disabled>Select category…</option>
           <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.parent_name }} › {{ c.name }}</option>
         </select>
         <label class="block">Price (IDR)
