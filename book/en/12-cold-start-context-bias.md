@@ -21,11 +21,9 @@ What you'll learn:
 
 Imagine you are the first person to greet a customer in a bookshop. A stranger walks in. You know nothing about them. What do you do? You do not stay silent. You point at the table of bestsellers, because bestsellers are the best guess for an unknown person. After the stranger picks up two cookbooks, you walk them to the cooking shelf. After ten minutes you are recommending a specific author. Cold start is exactly this ladder: *start with what is true for everyone, then narrow as evidence accumulates.* A recommender that skips the ladder either says nothing (an empty page) or pretends to know a person it has never met.
 
-New items are a mirror-image problem. Picture a restaurant menu where the waiter only recommends dishes that other diners have already ordered. A brilliant new dish never gets ordered, so it is never recommended, so it is never ordered. The waiter must sometimes *spend* a recommendation on something unproven, or the menu will never change. This is the exploration problem from chapter 11, and it returns here because new items are the main reason to explore.
+New items are the mirror image: a waiter who only recommends dishes others have ordered never promotes a brilliant new dish, so it is never ordered. Someone must spend a recommendation on something unproven (the exploration problem of chapter 11).
 
 Position bias has the cleanest analogy. Take two identical doors, one at eye level at the front of a corridor and one at the far end behind a corner. More people will walk through the first door, and not because it is a better door. A supermarket shelf shows the same effect: the products at eye level sell more than the ones near the floor, even if you swap them. If you judged the products by sales alone, you would "learn" that eye-level products are better and then put them at eye level again. That self-confirming circle is a **feedback loop**, and we will see it twice in this chapter, once for position and once for popularity.
-
-Context is the simplest of the four ideas. The same person wants different things at 07:30 on a commuter train (a phone charger, a podcast-friendly earphone) and at 21:00 on the sofa (a dress, a rice cooker). Their long-term taste has not changed, but what they are willing to look at has. A recommender that ignores context treats both moments as identical.
 
 ```mermaid
 flowchart TD
@@ -55,15 +53,11 @@ Walk through the pipeline of chapters 8–10 and ask at each stage: *what happen
 1. **Candidate generation.** The four retrievers are `recent` (items the user viewed), `covisit` (items viewed together with those), `catpop` (popular items in categories the user likes) and `global_trending`. For a user with no history, the first three return nothing for that user. `global_trending` does not depend on the user, so *every* user, including a brand-new one, receives at least the globally trending items. That is the first rung of the ladder, and it is built into `candidates.generate`.
 2. **Features.** User-level features are built by aggregating events. A user with no events has no row in the event aggregates, so a left join produces missing values. The builder fills them with explicit sentinels: counters become $0$, and "days since active" becomes a large constant (`NEVER_DAYS = 999`). LightGBM natively accepts missing values for the rest, learning at each split which side missing values should go to.
 3. **Ranking.** The ranker is one model for everyone. It has seen training examples with thin and empty histories, so it has learned what to do when `user_clicks_30d` is zero: lean on item-level features such as smoothed item CTR and conversion rate.
-4. **Re-ranking and serving.** Nothing changes, except that the "Why this?" panel will tell the truth: the source is `trending`, and the biggest contributions are item-level popularity features.
-
 **New items** are the harder case, because the usual strong signals are all behavioural. A product listed an hour ago has no clicks, no orders, no co-visits, and an item-level CTR that is the Bayesian-smoothed prior. The smoothing formula from chapter 3 is exactly the right tool: with prior rate $p_0$ and prior strength $s$,
 
 $$\hat{p} = \frac{x + p_0\, s}{n + s}$$
 
 where $x$ is the number of clicks and $n$ the number of impressions. With $x = 0$ and $n = 0$ the estimate is $p_0$, the catalogue average, not zero. A new item is therefore treated as "average until proven otherwise", rather than "terrible because nobody clicked it". Without smoothing, a brand-new item would have a CTR of $0/0$ (undefined) or $0$ (hopelessly low). The ranker also receives `item_age_days`, so it can learn explicit freshness effects.
-
-The harder question is how a new item gets *candidates*. The retrievers need behaviour to find it: `covisit` needs co-views, `recent` needs a user to have viewed it, and `global_trending` ranks by decayed interactions in the last three days. A new item does not appear in any of them until it earns interactions, and it earns interactions only by appearing. This chicken-and-egg problem is where content-based retrieval from chapter 4 shines, because titles and categories exist from the first second. Production systems add at least one of: a "new arrivals" retriever with a reserved quota, content-embedding similarity to the seller's other items, or an exploration slot.
 
 ### Position bias and inverse propensity weighting
 
@@ -96,15 +90,13 @@ Position bias is the *local* feedback loop; the *global* one works at the catalo
 
 $$s_i^{(t+1)} = \frac{s_i^{(t)}\, r_i}{\sum_j s_j^{(t)}\, r_j}.$$
 
-Take two items with $r_A = 0.12$ and $r_B = 0.10$ and a 50/50 start. Week 1: $s_A = 0.5 \cdot 0.12 / (0.5 \cdot 0.12 + 0.5 \cdot 0.10) = 0.06/0.11 = 0.545$. Week 2: $s_A = 0.545 \cdot 0.12 / (0.545 \cdot 0.12 + 0.455 \cdot 0.10) = 0.0654/0.1109 = 0.590$. Each week the slightly better item takes a larger share, and the slightly worse one disappears from view. Notice what the loop does *not* do: it does not discover that a third item C with $r_C = 0.30$, never displayed, would be best of all. The loop amplifies what the system already believes; it does not question it.
-
-Chaney and colleagues showed in simulation that training recommenders on data already shaped by recommendations homogenises user behaviour without improving real utility (see the fact box below). The practical antidotes are the ones from chapter 11, exploration and diversity, plus honest logging: record *impressions with positions*, not just clicks, so that the model at least knows what the user was and was not shown.
+Take $r_A = 0.12$, $r_B = 0.10$ and a 50/50 start: week 1 gives $s_A = 0.06/0.11 = 0.545$ and week 2 gives $0.590$. The slightly better item keeps gaining share, and a never-displayed item C with $r_C = 0.30$ is never discovered. The loop amplifies what the system already believes; it does not question it.
 
 ### Where does context belong?
 
-Finally, request-time context: hour of day, day of week, device, entry surface. This repository logs all of them (the `sessions` table stores `surface` and `device_os`; `events` has `ts`, `position` and `surface`), and yet the LightGBM ranker of chapters 9–10 does **not** use them as features. That is deliberate, and `recommender/README.md` explains why in its "What's deliberately simplified" section.
+The ranker predicts a 7-day outcome per user, so the request hour is identical for all of a user's candidates and has no per-request label (`recommender/README.md`, "What's deliberately simplified"). Chaney et al. (RecSys 2018) showed in simulation that training on already-recommended data homogenises behaviour without adding utility; the antidotes are exploration, diversity and logging impressions with positions.
 
-The ranker answers the question "which items will this user interact with in the *next 7 days*?". Its training rows are (user, candidate) pairs at a cutoff, with a label aggregated over a whole week. The hour of the request is the same number for every candidate of that user, and moreover, "hour of the request" has no meaning for a label that summarises seven days. A feature that is constant within a ranking group cannot order candidates by itself. Trees could in principle learn interactions (for example "at night, prefer small-ticket items"), but there is no per-request signal in the label to teach them.
+Finally, request-time context: hour of day, day of week, device, entry surface. This repository logs all of them (the `sessions` table stores `surface` and `device_os`; `events` has `ts`, `position` and `surface`), and yet the LightGBM ranker of chapters 9–10 does **not** use them as features. That is deliberate, and `recommender/README.md` explains why in its "What's deliberately simplified" section.
 
 The correct place for context is a **second, real-time model** trained on the impression log: each row is one displayed item, the label is whether it was clicked, and the features include hour, surface, device and the *position it was shown at*. That model re-scores the few dozen items that the weekly ranker already selected. Real-time **session features** belong to the same layer: "categories clicked in the last 30 minutes", "the last search query", "items added to the cart this session". The `recent` retriever and `Store.refresh()` already give this repository a taste of it, because a click posted two seconds ago changes the next response; but the ranker itself is retrained only periodically.
 
@@ -116,16 +108,6 @@ Source: Joachims et al., SIGIR, 2005
 ::: fact
 **Heuristics are surprisingly hard to beat when you know nothing.** Schein and colleagues benchmarked a probabilistic model for the cold-start problem, recommending items that nobody has rated yet, against trivial "heuristic recommenders". On the implicit-feedback task, simply ranking users by how many movies they had rated gave nearly the same global performance as their aspect model, which led the authors to argue that such heuristic baselines should always be included in this kind of evaluation.
 Source: Schein et al., SIGIR, 2002
-:::
-
-::: fact
-**Bandits have been used on a real news front page.** Li and colleagues modelled the Yahoo! Front Page Today Module as a contextual bandit and evaluated their LinUCB algorithm offline on a dataset of more than 33 million events. They report a 12.5% click lift over a standard context-free bandit, and the advantage grew when data was scarce, which is exactly the cold-start regime.
-Source: Li et al., WWW, 2010
-:::
-
-::: fact
-**Training on recommended data can homogenise behaviour.** Chaney, Stewart and Engelhardt simulated recommender systems that repeatedly retrain on data generated under their own recommendations. Their simulations show that this "algorithmic confounding" makes users' behaviour more similar to one another without increasing utility for the users.
-Source: Chaney et al., RecSys, 2018
 :::
 
 ## Code walkthrough
@@ -143,30 +125,11 @@ symbol: global_trending
 
 `global_trending` takes the last three days of weighted interactions (click, cart and order events, each with its own weight), keeps items that are in stock, and returns the top `N_GLOBAL`. It takes no user argument. That one fact is the entire anonymous-user story: the function produces candidates that are the same for everyone.
 
-```include
-path: recommender/recsys/candidates.py
-symbol: generate
-```
-
-Read `generate` with a cold user in mind. The three personalised sources are merged in with an `outer` merge starting from `users.merge(sources[0], on="user_id")`, an inner join with `recent`. A user with no `recent` row simply gets no rows from the first source. The trending frame is built with a `cross` join, `users.merge(global_trending(...), how="cross")`, so *every* user id in `user_ids` receives all trending items. That guarantee, "no user ever has zero candidates", is the reason the ranker never receives an empty group. Two lines further down, `hidden` implements a hard rule that applies equally to cold and warm users: an item the user hid is never shown again.
-
-Also notice the fill-ins at the bottom: `cand_n_sources` counts how many retrievers proposed an item, and the missing source scores become $0.0$ and the missing trending rank becomes $999$. Those sentinels become features. A cold user's candidates will all have `cand_n_sources` equal to 1 (trending only), a pattern the ranker learns to recognise.
+Every user id in `generate` is cross-joined with the trending frame, so no user ever has zero candidates and the ranker never receives an empty group. Missing source scores become $0.0$ and the missing trending rank becomes $999$; a cold user's candidates all have `cand_n_sources` equal to 1, a pattern the ranker learns to recognise.
 
 ### Features that tolerate emptiness
 
-```include
-path: recommender/recsys/features.py
-symbol: user_features
-```
-
-`user_features` begins from the complete `users` table, so every user has a row even without events. The count merges are `how="left"`, and `fillna` turns missing counts into zero. Then comes the one place smoothing matters most for cold users:
-
-```include
-path: recommender/recsys/features.py
-symbol: _smoothed
-```
-
-`_smoothed` is the formula $\hat{p} = (x + p_0 s)/(n + s)$ in one line. Look at the call in `user_features`: `_smoothed(u["user_clicks_30d"], u["_impr_30d"], global_ctr, 20)`. A new user with $0$ clicks and $0$ impressions gets exactly `global_ctr`; a user with $2$ clicks in $3$ impressions is pulled most of the way back towards the average rather than being declared a 67% clicker. The strength parameter $s = 20$ acts like "twenty imaginary impressions at the average rate".
+In `features.user_features` every user has a row (it starts from the full `users` table), count merges are left joins, and `fillna` turns missing counts into zero. `_smoothed`, the formula $\hat{p} = (x + p_0 s)/(n + s)$, is called in `user_features` as `_smoothed(u["user_clicks_30d"], u["_impr_30d"], global_ctr, 20)`: a new user gets exactly `global_ctr`, and $s = 20$ acts like twenty imaginary impressions at the average rate.
 
 After the join, `user_days_since_active` for users without events is filled with `NEVER_DAYS = 999`. This is a better sentinel than zero, because zero would mean "active just now", the opposite of the truth. Features for items follow the same philosophy in `item_features`: counts become zero, rates are smoothed towards the catalogue average, and `item_age_days` is computed directly from `listed_at`, which exists even for an item nobody has seen.
 
@@ -199,20 +162,9 @@ region: recommend_route
 
 Three details deserve attention. The gRPC call is wrapped in `tokio::time::timeout(Duration::from_secs(5), ...)`, so a *slow* service is treated the same as a *dead* one: a user is never left staring at a spinner longer than five seconds. The `match` has only one success arm; the catch-all `other` covers both the gRPC error and the elapsed timeout, logs a warning (distinguishing an error from a timeout) and falls through to `fallback(&st.pool, k, None, None)`. And the JSON it returns has exactly the same shape as the success path, plus `"fallback": true` and `"model_version": "fallback"`. The frontend does not need a second code path; it only needs to read the flag and show a banner.
 
-![The home page when the recommender service is stopped: the yellow banner reads "Recommender offline — showing popular items" and the cards are plain best-sellers.](../assets/screenshots/fallback-banner.png)
+The yellow banner on the home page (screenshot `fallback-banner.png`, shown in chapter 13's tour) is all the frontend needs to change.
 
-*Figure: the fallback banner. The page is still fully usable, but every card now comes from the SQL best-seller query and "Why this?" has nothing personal to say.*
-
-### Logging what makes bias analysable
-
-Finally, notice that the position-bias table later in this chapter is only possible because the browser logs impressions *with positions*. This is the component that does it:
-
-```include
-path: frontend/src/components/ProductGrid.vue
-region: impressions
-```
-
-The `position` passed to `track` is simply the array index, and `surface` says which page produced the grid. The `seen` set guarantees one impression per item id per grid instance, which stops a re-render from inflating the denominator of every CTR computed from this table. If you log clicks but not impressions with positions, the entire analysis below becomes impossible: you can compute neither a click-through rate nor a propensity.
+The position table below exists only because the browser logs impressions *with positions* (`ProductGrid.vue`: `position` is the array index, one impression per item per grid). Without that log you can compute neither a CTR nor a propensity.
 
 ## Run it
 
@@ -226,7 +178,7 @@ Its stdout is stored in `results/ch12_coldstart_bias.txt`. We read it one sectio
 
 ```output
 file: results/ch12_coldstart_bias.txt
-lines: 2-19
+lines: 4-18
 ```
 
 Then the activity buckets, which compare the popularity baseline `pop_7d` from chapter 3 with the LambdaMART ranker from chapter 10:
@@ -243,8 +195,6 @@ file: results/ch12_coldstart_bias.txt
 lines: 34-38
 ```
 
-The script reuses everything built so far. It calls `ltr_data.frames()` for the training and evaluation frames, trains `ranker.train`, builds `pop_7d` with `candidates.item_popularity(hist, 7)`, and evaluates both through the shared `recsys.evaluate.metrics` function, so these numbers are directly comparable with chapters 3 and 10. Users are bucketed by the number of `click` events in their history before the cutoff.
-
 ## Results
 
 ### The position table
@@ -254,8 +204,6 @@ The script reuses everything built so far. It calls `ltr_data.frames()` for the 
 *Figure: click-through rate by display position. Every position has exactly the same number of impressions, so the bars are directly comparable.*
 
 Each of the twelve positions has exactly 16,770 impressions, which means the denominators are equal and the bar heights are honest rates. Position 0 has a CTR of 0.2385 and position 11 has 0.0156, a ratio of 15.3 times. The decline is not smooth. From position 0 to position 1, CTR drops from 0.2385 to 0.1734; positions 1 to 5 slide gently from 0.1734 to 0.1248; then between position 5 (0.1248) and position 6 (0.0673) it nearly halves in a single step. That cliff is consistent with a page whose first six items are visible without scrolling. Joachims et al. observed a similar break at the fold in their eye-tracking data. Positions 6 to 10 then decline slowly, and position 11 drops sharply again.
-
-The script's own comment is the right reading: part of the 15.3x gap is position bias (people look at the top) and part is that better items are placed higher. The table alone cannot separate the two. It is a reminder not to treat raw CTR by position as the propensity curve $\theta_k$: that requires the randomised swaps described earlier.
 
 ### Personalisation pays as history grows
 
@@ -269,8 +217,6 @@ The LambdaMART rows rise steeply: ndcg@20 of 0.0666, 0.1395 and 0.2606. For the 
 
 First, **the ranker already beats popularity even for users with at most two clicks**. A plausible reason (we did not isolate it here) is that trending candidates plus item-level features such as smoothed CTR and conversion rate make a better popularity model than a raw seven-day count. The ratio for the 3–10 bucket (2.86x) is similar to that of the cold bucket (2.76x); the large jump happens only above ten clicks, where personalised retrievers (`recent`, `covisit`, `catpop`) and user-item features start to dominate the candidate pool and the ranking.
 
-Second, **the numbers for the 0–2 bucket are noisy**. There are only 78 users in it. Compare it to the 611 users in the largest bucket: a handful of lucky users can move the mean noticeably. Treat 2.76x as "somewhere between 2 and 4 times", not as a precise value. This is also a general lesson for evaluating cold-start populations: because they are small by definition, evaluation noise is highest exactly where the business interest is greatest. A common remedy is to average over multiple cutoffs or to run an online experiment on the new-user cohort.
-
 ### The new-item exposure table
 
 The third table is the most uncomfortable one. Items listed less than seven days before the cutoff make up 2.16% of the available catalogue. Among the *future positives* (the items users actually went on to interact with during the label week) they make up 2.68%, slightly more than their catalogue share, so users do want fresh items. What do the methods show them? `pop_7d` puts exactly 0.00% new items into its top 20s. LambdaMART puts 0.25%. Both are an order of magnitude below the 2.68% that users would have welcomed.
@@ -281,32 +227,18 @@ This is a feedback loop in action, caught in a single table. The ranker is not m
 
 **Treating "new user" as one case.** There are at least three: a visitor who has not logged in, a newly registered user with a profile but no behaviour, and a returning user who has been away for months. This repository handles the first with `user_id = 0`, which reaches the service through `Recommend` as an ordinary request and gets trending candidates. The second can use the `city`, `age_bucket` and `device_tier` columns that the registration form already collects. The third is best handled by features like `user_days_since_active` that expose the gap to the model.
 
-**Onboarding questions.** Many marketplaces ask new users to pick interest categories on first launch. That turns an empty history into a handful of synthetic `search` or `click` events and puts the user on the thin path immediately. The cost is friction, and the benefit depends heavily on the audience.
-
-**Mistaking cold-start metrics for overall metrics.** Averages hide cohorts. When most evaluation users are heavy users (611 of the 947 above), the overall ndcg is mostly the heavy-user number. Always report by cohort: new vs returning users, new vs old items, head vs tail categories.
-
-**Estimating propensities from the production ranking.** As explained above, this confounds examination with relevance. Use randomisation (a small percentage of traffic gets a shuffled or swapped ordering), a position-as-feature model with a constant at serving time, or both. Joachims, Swaminathan and Schnabel's WSDM 2017 paper is the standard reference for unbiased learning to rank with propensity weights. Remember to clip weights.
-
-**Skipping the impression log.** A system that logs only clicks cannot compute CTR, cannot see position bias, and cannot tell "not interested" from "never shown". Log every impression with its position and surface, as `ProductGrid.vue` does, and accept the storage cost, because impressions are far more numerous than clicks.
-
-**Fixing cold start with a hard-coded boost.** The temptation is a rule such as "put one new item at position 3". It is cheap and visible, but it ignores relevance and teaches sellers to game the listing date. A better approach is a *budgeted exploration* slot: reserve a small fraction of impressions for new items, pick them with a bandit (Thompson sampling, from chapter 11), and measure their eventual performance so that bad new items are cut quickly.
-
-**Fallbacks that fail the same way as the primary.** A fallback is only a safety net if it does not share the failure mode. The `fallback` function does not call Python and does not use the in-memory `Store`; it only needs Postgres, which the API needs anyway. Test it periodically (the guide's "stop the service and refresh Home" experiment is exactly this test), because a fallback that is never exercised tends to rot.
-
 **Context in the wrong place.** Adding "hour of day" to the weekly ranker gives you a feature that is constant within each group; at best it is ignored, at worst it lets the trees fit noise. Put context in the real-time layer, which has per-impression rows and labels. The repository README describes the production version of this design: a second, real-time ranker trained on the `impression` log that can use hour, surface and position, sitting after the long-term-taste stack.
-
-**Session features, with care.** "Categories clicked in the last 30 minutes" is one of the strongest signals available, and also one of the easiest to leak: if you compute it at training time using events after the impression, offline numbers will be inflated. The point-in-time discipline of chapter 9 applies with extra force to anything measured in minutes rather than days. A streaming feature store (chapter 14) exists mainly to serve these features consistently in training and serving.
 
 ## Summary
 
 - Cold start comes in three kinds (new user, new item, new system); the cure for each is a *ladder* of fallbacks that narrows from global to personal as evidence accumulates.
-- In this repository `global_trending` guarantees every user, including `user_id = 0`, at least some candidates, and smoothing plus explicit sentinels (`NEVER_DAYS`) keep the features meaningful for users with no events.
+- Here `global_trending` guarantees every user, including `user_id = 0`, at least some candidates, and smoothing plus explicit sentinels (`NEVER_DAYS`) keep the features meaningful for users with no events.
 - If the Python service is slow or down, the Rust API returns a SQL best-seller list with `fallback: true` after a five-second timeout, with the same JSON shape as a normal response.
 - Position bias is visible in the impression log: CTR falls from 0.2385 at position 0 to 0.0156 at position 11, but raw CTR by position mixes examination with relevance and is not a propensity curve.
 - Inverse propensity weighting divides each click by the probability that its position was examined; it is unbiased but high-variance, so weights are clipped and propensities are estimated with randomisation.
 - The ranker beats the popularity baseline in all activity buckets, but the margin grows from 2.76x (0–2 clicks) to 5.22x (more than 10 clicks); cold cohorts are small, so their metrics are noisy.
 - New items are 2.16% of the catalogue and 2.68% of future positives but only 0.25% of LambdaMART's top 20: an offline-better model can still starve the catalogue, which is a feedback loop.
-- Request-time context does not belong in a weekly "next 7 days" ranker; it belongs in a real-time impression-level model, together with session features.
+- Request-time context belongs in a real-time impression-level model, not in a weekly "next 7 days" ranker.
 
 ## Quiz
 
