@@ -67,14 +67,27 @@ def main() -> None:
         print(f"{r['user']:<7}{r['interactions']:>7}{r['candidates']:>7}{r['history_at_ms']:>12.0f}{r['generate_ms']:>10.0f}"
               f"{r['features_build_ms']:>10.0f}{r['score_ms']:>8.0f}{r['rerank_ms']:>8.0f}{r['shap_ms']:>7.0f}{r['total_ms']:>8.0f}")  # fmt: skip
 
-    common.section("Inside generate / features: item-level work that does not depend on the user")
-    for r in rows[:1]:
-        print(f"covisitation_matrix (inside generate):  {r['covisit_matrix_ms']:.0f} ms")
-        print(f"item_features      (inside features):  {r['item_features_ms']:.0f} ms")
+    common.section("Inside features.build: every table is aggregated for ALL users/items, then joined")
+    hist = data.History.at(tables, common.END)
+    parts = {}
+    for fn in (features.item_features, features.user_features, features.user_item_features,
+               features.user_category_features, features.user_shop_features, features.user_price_level):
+        _, parts[fn.__name__] = timed(fn, hist)
+    item_level = parts["item_features"]
+    user_level = sum(v for k, v in parts.items() if k != "item_features")
+    for name, ms in parts.items():
+        scope = "item-level (same for every user)" if name == "item_features" else "all users' events"
+        print(f"{name:<24}{ms:>6.0f} ms   {scope}")
+    print(f"covisitation_matrix     {rows[0]['covisit_matrix_ms']:>6.0f} ms   item-level (inside generate)")
     share = np.mean([(r["generate_ms"] + r["features_build_ms"]) / r["total_ms"] for r in rows])
-    print(f"\ngenerate + features.build = {share:.0%} of the request on average;")
-    print("both recompute catalogue-wide statistics on every call, whatever the user.")
-    common.save_results("ch13_profile", {"repeats": REPEATS, "rows": rows, "generate_plus_features_share": share})
+    print(f"\ngenerate + features.build = {share:.0%} of the request on average.")
+    print(f"Item-level work (item_features + covisitation_matrix): {item_level + rows[0]['covisit_matrix_ms']:.0f} ms;")
+    print(f"user-side aggregations computed over every user, though one user asked: {user_level:.0f} ms.")
+    print("Caching item-level frames saves the first number; filtering events to the requesting")
+    print("user before the user-side aggregations is needed to remove the second.")
+    common.save_results("ch13_profile", {"repeats": REPEATS, "rows": rows, "generate_plus_features_share": share,
+                                         "features_build_parts_ms": parts, "item_level_ms": item_level + rows[0]["covisit_matrix_ms"],
+                                         "user_side_all_users_ms": user_level})  # fmt: skip
 
 
 if __name__ == "__main__":
