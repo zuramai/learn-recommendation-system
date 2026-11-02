@@ -22,6 +22,8 @@ Pembagian ini disengaja, dengan tiga alasan.
 2. **Recommender boleh salah atau mati tanpa menjatuhkan toko.** Ia berada di balik batas jaringan dengan *timeout* dan tidak memegang koneksi yang bisa menulis: di `recsys/db.py`, `connect(read_only=True)` menyetel `default_transaction_read_only=on`, sehingga `INSERT` yang tidak disengaja akan gagal dengan keras lewat `ReadOnlySqlTransaction`.
 3. **Setiap sisi memakai alat yang tepat.** Rust untuk API konkuren dengan pengecekan tipe dan transaksi; Python untuk pandas, LightGBM, dan kode riset.
 
+**Apa arti "koneksi read-only".** Koneksi database adalah saluran telepon dari sebuah program ke database. Saluran *read-only* hanya bisa bertanya ("apa yang diklik pembeli Dewi?") tetapi tidak bisa mengubah apa pun. Ibarat koki yang boleh melihat buku besar lewat jendela kaca: ia bisa membaca setiap catatan, tetapi tidak bisa memegang pulpen. Tanpanya, satu bug di recommender, misalnya perulangan yang memperbarui tabel yang salah, bisa merusak pesanan dan stok secara diam-diam. Dengannya, bug yang sama hanya menghasilkan pesan error.
+
 ```mermaid
 flowchart LR
     B[Browser<br/>Vue 3 + Pinia] -->|"HTTP /api (cookie JWT)"| A[API Rust<br/>Axum + sqlx]
@@ -32,6 +34,24 @@ flowchart LR
     A -.->|"saat gRPC error:<br/>query fallback"| P
 ```
 *Gambar: Empat proses. Rust adalah satu-satunya penulis; Python membaca Postgres lewat koneksi read-only dan dipanggil melalui gRPC.*
+
+### Istilah yang akan Anda temui di bab ini
+
+Beberapa istilah teknis muncul di halaman-halaman berikut. Berikut masing-masing dalam bahasa sederhana, dikaitkan dengan restoran. Anda bisa kembali ke tabel ini kapan pun sebuah istilah terasa asing; setiap istilah dijelaskan lagi, dengan contoh, di tempat ia pertama kali penting.
+
+| Istilah | Arti sederhana | Di restoran |
+|---|---|---|
+| **REST API** | Kumpulan alamat web (URL) yang bisa dipanggil sebuah program untuk meminta sesuatu atau mengirim sesuatu, misalnya `GET /api/recommendations` ("beri saya feed") atau `POST /api/events` ("ini beberapa event"). Balasannya biasanya JSON, format teks biasa untuk data. | Jendela pemesanan pelayan: pelanggan meminta dengan cara yang tetap dan mendapat jawaban dengan cara yang tetap. |
+| **JWT cookie** | Setelah Anda login, server memberi browser secarik catatan bertanda tangan yang berbunyi "ini Dewi" (*JSON Web Token*, JWT). Browser menyimpannya dalam *cookie* dan menyertakannya pada setiap permintaan berikutnya, sehingga Dewi tidak perlu login lagi untuk setiap klik. `httpOnly` berarti skrip halaman tidak bisa membaca catatan itu, sehingga terlindung dari pencurian. | Gelang tangan yang diberikan di pintu: staf memeriksanya, bukan meminta KTP setiap kali. |
+| **gRPC** | Cara agar satu program memanggil fungsi yang berada di program *lain*, mungkin dalam bahasa lain, seolah-olah fungsi lokal. | Pelayan berseru lewat jendela dapur: "sarankan sesuatu untuk meja 12!" |
+| **Protobuf / `.proto`** | *Protocol Buffers*: berkas pendek yang mendaftar persis field apa saja di setiap permintaan dan balasan. Kedua program menghasilkan kodenya dari satu berkas ini, sehingga keduanya tidak bisa berselisih. | Formulir pesanan cetak yang dipakai pelayan maupun koki. |
+| **Koneksi read-only** | Koneksi database yang bisa membaca tetapi tidak pernah menulis. | Jendela kaca ke buku besar. |
+| **Beacon** | Fitur browser (`navigator.sendBeacon`) yang menyerahkan pesan kecil kepada browser untuk dikirim *setelah* halaman ditutup. | Memasukkan surat ke kotak pos saat keluar, alih-alih menunggu balasan di meja kasir. |
+| **Latensi, p50, p99** | Latensi adalah berapa lama satu permintaan berlangsung. p50 adalah waktu tipikal (median); p99 adalah waktu yang dikalahkan oleh 99 dari setiap 100 permintaan. | Berapa lama sebuah meja menunggu saran; p99 adalah penantian terburuk, bukan yang rata-rata. |
+| **Profiling** | Mengukur waktu setiap tahap dari pekerjaan yang lambat untuk menemukan ke mana waktunya pergi. | Mengukur waktu setiap langkah memasak untuk tahu langkah mana yang membuat meja menunggu. |
+| **Retrain** (pelatihan ulang) | Membangun model lagi dari data terbaru. | Koki merevisi catatan resep setelah satu minggu yang sibuk. |
+| **Fallback** | Rencana cadangan yang lebih sederhana ketika sistem utama gagal. | Kartu cetak hidangan terlaris. |
+| **Cutoff = now** | Di bab-bab sebelumnya, *cutoff* adalah tanggal lampau yang kita anggap "hari ini" agar pengujian adil. Saat melayani pembeli sungguhan, "hari ini" itu nyata, sehingga cutoff adalah waktu saat ini. | Tidak ada yang disembunyikan, karena masa depan belum terjadi. |
 
 ## Algoritma: perjalanan satu klik
 
@@ -95,6 +115,8 @@ Sumber: Sculley et al., NeurIPS, 2015
 ### Tracker
 
 `track()` pertama-tama memeriksa `if (!useAuth().user) return`: pengunjung anonim tidak menghasilkan event (server juga menjawab `204` tanpa menyimpan), sehingga pengunjung baru hanya mendapat item *trending*, jalur *cold start* di Bab 12. Lalu datang kebijakan *batching*: kirim pada `FLUSH_AT = 20`, kalau tidak, mulai *timer* 2 detik. `flush()` sengaja menelan error jaringan: pelacakan bersifat *best-effort*. Bagian bawah region menangani kepergian dari halaman, ketika browser dapat membatalkan panggilan `fetch` yang sedang berjalan; `navigator.sendBeacon` mengantrekan POST kecil yang dikirim browser setelah halaman hilang. Himpunan `pageHideHooks` membawa cerita sebuah bug, di bawah.
+
+**Apa itu beacon, dan mengapa dibutuhkan?** Ketika Dewi menutup tab, browser membongkar halaman. Permintaan jaringan biasa yang masih dalam perjalanan bisa dibatalkan, seperti pelanggan yang pergi sebelum pelayan selesai menulis pesanan. `navigator.sendBeacon` mengatasinya dengan menyerahkan pesan kecil kepada browser itu sendiri, yang berjanji mengirimkannya meskipun halaman sudah hilang. Harganya, Anda tidak bisa menunggu balasan atau melihat error, yang tidak masalah untuk "pembeli mengklik ini."
 
 ```include
 path: frontend/src/composables/useTracker.ts
@@ -210,6 +232,8 @@ Metode ini menyegarkan store, membatasi `k` ke 1..50, dan mengambil referensi ke
 
 ### Pelatihan ulang tanpa *downtime*
 
+Pelatihan ulang (*retraining*) berarti **membangun model peringkat lagi dari data terbaru**. Model adalah potret pola yang ditemukan pada data yang dipakai melatihnya. Seiring item baru ditayangkan dan selera berubah, potret itu menjadi usang, seperti buku resep yang tidak pernah menyebut hidangan musim ini. Tanpa pelatihan ulang, rekomendasi pelan-pelan memburuk. Kesulitannya adalah melakukannya sementara pelanggan terus memesan, yang dipecahkan oleh paragraf-paragraf berikut.
+
 Input ranker bergeser seiring item bermunculan dan selera berubah, sehingga layanan melatih ulang dengan dua pemicu: *thread* latar belakang setiap `RECSYS_RETRAIN_INTERVAL_SEC` (enam jam secara bawaan) dan panggilan gRPC `Retrain` khusus admin di balik tombol pada halaman "How it works".
 
 ```include
@@ -220,6 +244,8 @@ symbol: retrain
 `retrain` tingkat modul dipakai bersama oleh layanan dan CLI. Ia melatih pada *snapshot* store dengan `end=now`, sehingga jendela label bergeser mengikuti jam, mengubah tabel evaluasi menjadi kunci datar seperti `lightgbm_ranker/ndcg@20`, dan menulis `ranker.txt` serta `model_meta.json`.
 
 Metodenya menambahkan dua pengaman. `retrain_lock.acquire(blocking=False)` membuat permintaan konkuren kedua gagal seketika (`ABORTED`, yang oleh Rust dipetakan ke `409`). Dan pertukaran `self.model, self.meta = model, meta` adalah dua penugasan referensi: panggilan `Recommend` yang sedang berjalan tetap memakai *booster* lama dan selesai secara konsisten, panggilan baru melihat yang baru, tanpa *lock* pada jalur baca.
+
+**Mengapa `end=now`: cutoff saat *serving*.** Di Kata Pengantar dan Bab 9 kita menetapkan *cutoff* di masa lalu (hari ke-53), menyembunyikan semua yang sesudahnya, lalu memeriksa model terhadap apa yang benar-benar terjadi berikutnya. Pelatihan masih bekerja seperti itu: model belajar dengan melihat "per hari ini, apa yang dilakukan orang pada minggu berikutnya?" pada banyak hari di masa lalu. Namun job pelatihan ulang cukup memakai *waktu saat ini* sebagai cutoff terbaru, sehingga setiap pelatihan ulang menggeser semua jendela itu ke depan. Inilah juga sebabnya pelatihan ulang menghasilkan metrik yang sedikit berbeda meskipun tidak ada kode yang berubah. Saat *serving* tidak ada yang perlu disembunyikan: masa depan belum terjadi, sehingga cutoff adalah `now`, dan `History.at(now)` berarti "semua yang diketahui hingga saat ini."
 
 ## Penelusuran kode, bagian 4: sisi Rust dari jembatannya
 
@@ -253,6 +279,8 @@ region: fallback
 Kartu cetak dari restoran kita: item aktif yang stoknya ada, diurutkan menurut event `order` dalam tujuh hari terakhir, lalu jumlah rating. Ia melabeli setiap baris `source: "trending"`, skor 0, tanpa contributions, sehingga frontend tidak membutuhkan jalur terpisah. Ia sengaja tidak dipersonalisasi: pengalaman menurun yang sama untuk semua orang tidak bisa salah dengan cara yang mengejutkan dan spesifik pengguna.
 
 ## Kontrak antarbahasa: satu `.proto`, dua generator kode
+
+**Skema** adalah deskripsi data yang disepakati. Di sini, sebuah permintaan adalah "id pengguna dan jumlah `k`", dan balasannya adalah "daftar item, masing-masing dengan id, skor, dan beberapa kontribusi". **gRPC** adalah mekanisme yang membawa pesan-pesan ini antara dua program; **Protocol Buffers** (protobuf) adalah format ringkas tempat pesan itu ditulis. Berkas deskripsi yang disepakati, `recommender.proto`, ibarat formulir pesanan cetak yang dipakai pelayan dan koki: keduanya dihasilkan darinya, sehingga permintaan yang ditulis satu sisi selalu bisa dibaca sisi lain. Tanpa formulir bersama, masing-masing sisi akan menebak format sisi lainnya, dan ketidakcocokan diam-diam baru muncul di produksi.
 
 API Rust dan layanan Python hanya berbagi sebuah skema, satu berkas pendek:
 
@@ -308,6 +336,8 @@ file: results/ch13_latency.txt
 
 "server latency_ms" adalah pengukuran milik layanan itu sendiri; "client wall ms" menambahkan serialisasi dan lompatan *loopback*. Selisihnya sekitar satu milidetik, sehingga pada dasarnya seluruh waktu berada di dalam recommender. Setiap permintaan menilai antara 30 dan 129 kandidat dan mengembalikan tepat 20 item.
 
+**Apa itu *profiling*?** Ketika sesuatu lambat, menebak penyebabnya biasanya gagal. *Profiling* berarti mengukur waktu setiap tahap secara terpisah dan membaca angkanya, seperti mengukur waktu setiap langkah menyiapkan hidangan untuk mengetahui apakah memotong, memasak, atau menata yang membuat meja menunggu. Skrip berikutnya melakukan persis itu untuk satu panggilan `Recommend`.
+
 Ke mana 840 ms itu pergi? Skrip kedua, `ch13_profile.py`, berjalan offline pada data simulasi melalui jalur `pipeline.recommend` yang persis sama, mengukur waktu setiap tahap untuk tiga pengguna dengan riwayat yang sangat berbeda (median dari 7 kali jalan). Ia tidak membutuhkan layanan yang berjalan:
 
 ```bash
@@ -324,6 +354,8 @@ Tabel per pengguna menunjukkan total 668 sampai 674 ms untuk pengguna dengan 4, 
 
 ### Latensi
 
+**Cara membaca p50, p90, dan p99.** Bayangkan sepuluh permintaan yang memakan waktu (dalam detik) 0.7, 0.7, 0.8, 0.8, 0.8, 0.8, 0.9, 0.9, 0.9, dan 1.5. Urutkan dari yang tercepat ke terlambat. **p50** (persentil ke-50, atau median) adalah titik tengah daftar terurut: separuh permintaan lebih cepat, sekitar 0.8 dtk. **p90** adalah waktu yang dikalahkan 90% permintaan, sekitar 0.9 dtk. **p99** adalah gagasan yang sama untuk 99 dari setiap 100 permintaan; dengan hanya sepuluh permintaan, nilainya berada dekat yang paling lambat, 1.5 dtk. Kita melaporkan persentil, bukan rata-rata, karena segelintir permintaan lambat nyaris tidak menggeser rata-rata, padahal itulah yang dialami pembeli yang sial. p99 menjawab: "seburuk apa bagi satu pembeli paling sial di antara seratus?"
+
 ![Histogram latensi Recommend di sisi server untuk 200 pengguna acak, dengan p50, p90, dan p99 ditandai](../assets/charts/ch13-latency-hist.png)
 
 Histogram menunjukkan badan yang rapat antara sekitar 770 dan 900 ms, serta ekor pendek yang mencapai sekitar 1,010 ms. Mediannya 839.9 ms, persentil ke-90 892.5 ms, dan ke-99 985.0 ms. Ada dua pengamatan penting.
@@ -335,6 +367,9 @@ Kedua, **0.84 dtk cukup untuk demo dan terlalu lambat untuk beranda sungguhan**.
 ### Tur screenshot
 
 Screenshot berasal dari aplikasi yang berjalan, diambil dengan Playwright. Halaman lainnya mengikuti pola yang sama: login menyetel JWT dalam cookie `httpOnly`; pencarian adalah SQL `ILIKE` biasa yang menulis baris `searches`; halaman produk memuat `/products/:id/similar` secara terpisah, sehingga recommender yang gagal tidak pernah memblokirnya; keranjang, checkout, dan pesanan menjalankan sisi penulis; dan produk yang baru ditayangkan di Seller Center adalah kasus *cold start* dari Bab 12.
+
+
+**Dua istilah dari paragraf itu.** *JWT cookie* adalah catatan bertanda tangan "ini user43" yang dijelaskan di tabel istilah di atas. Browser menyertakannya secara otomatis, dan flag `httpOnly` mencegah skrip halaman membacanya, sehingga skrip yang bermasalah pun tidak bisa mencuri login. Dan `ILIKE` adalah pencocokan teks di SQL yang tidak membedakan huruf besar-kecil: mencari "cat" menemukan "Cat food".
 
 ![Halaman produk dengan tombol Add to cart dan grid item serupa](../assets/screenshots/product-similar.png)
 

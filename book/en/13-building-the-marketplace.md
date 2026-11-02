@@ -22,6 +22,8 @@ The division is deliberate, for three reasons.
 2. **The recommender can be wrong or down without taking the shop down.** It sits behind a network boundary with a timeout and holds no write-capable connection: in `recsys/db.py`, `connect(read_only=True)` sets `default_transaction_read_only=on`, so an accidental `INSERT` fails loudly with `ReadOnlySqlTransaction`.
 3. **Each side uses the right tool.** Rust for a concurrent, type-checked API with transactions; Python for pandas, LightGBM and the research code.
 
+**What "read-only connection" means.** A database connection is a phone line from a program to the database. A *read-only* line can ask questions ("what did shopper Dewi click?") but cannot change anything. It is like letting the chef look at the ledger through a glass window: they can read every entry, but they cannot pick up a pen. Without it, one bug in the recommender, say a loop that updates the wrong table, could silently corrupt orders and stock. With it, the same bug just produces an error message.
+
 ```mermaid
 flowchart LR
     B[Browser<br/>Vue 3 + Pinia] -->|"HTTP /api (cookie JWT)"| A[Rust API<br/>Axum + sqlx]
@@ -32,6 +34,24 @@ flowchart LR
     A -.->|"on gRPC error:<br/>fallback query"| P
 ```
 *Figure: The four processes. Rust is the only writer; Python reads Postgres through a read-only connection and is called over gRPC.*
+
+### Words you will meet in this chapter
+
+Several technical terms appear in the next pages. Here is each one in plain words, tied to the restaurant. You can come back to this table whenever a term feels unfamiliar; each one is explained again, with an example, where it first matters.
+
+| Term | Plain meaning | In the restaurant |
+|---|---|---|
+| **REST API** | A set of web addresses (URLs) that a program can call to ask for something or to send something, for example `GET /api/recommendations` ("give me the feed") or `POST /api/events` ("here are some events"). The reply is usually JSON, a plain-text format for data. | The waiter's order window: the customer asks in a fixed way and gets an answer in a fixed way. |
+| **JWT cookie** | After you log in, the server hands the browser a small signed note saying "this is Dewi" (a *JSON Web Token*, JWT). The browser stores it in a *cookie* and attaches it to every later request, so Dewi need not log in again for each click. `httpOnly` means page scripts cannot read the note, which protects it from theft. | A wristband given at the door: staff check it instead of asking for ID each time. |
+| **gRPC** | A way for one program to call a function that lives in *another* program, possibly in another language, as if it were a local function. | The waiter calling through the kitchen hatch: "suggest something for table 12!" |
+| **Protobuf / `.proto`** | *Protocol Buffers*: a short file that lists exactly which fields each request and reply contains. Both programs generate their code from this one file, so they cannot disagree. | A printed order form that waiter and chef both use. |
+| **Read-only connection** | A database connection that can read but never write. | The glass window onto the ledger. |
+| **Beacon** | A browser feature (`navigator.sendBeacon`) that hands a small message to the browser to deliver *after* the page has closed. | Dropping a letter into a postbox on your way out, instead of waiting at the counter for a reply. |
+| **Latency, p50, p99** | Latency is how long one request takes. p50 is the typical (median) time; p99 is the time that 99 of every 100 requests beat. | How long a table waits for a suggestion; p99 is the worst waits, not the average ones. |
+| **Profiling** | Timing each stage of a slow job to find where the time goes. | Timing each step of a dish to see which step makes the table wait. |
+| **Retrain** | Building the model again from the newest data. | The chef revising the recipe notes after a busy week. |
+| **Fallback** | A simpler plan B used when the main system fails. | The printed card of best-sellers. |
+| **Cutoff = now** | In earlier chapters the *cutoff* was a past date we pretended was "today" to test fairly. When serving real shoppers, "today" is real, so the cutoff is simply the current time. | Nothing is hidden, because the future has not happened yet. |
 
 ## The algorithm: the life of one click
 
@@ -95,6 +115,8 @@ Source: Sculley et al., NeurIPS, 2015
 ### The tracker
 
 `track()` first checks `if (!useAuth().user) return`: anonymous visitors generate no events (the server also answers `204` without storing), so new visitors only get trending items, the cold-start path of Chapter 12. Then comes the batching policy: send at `FLUSH_AT = 20`, otherwise start a 2-second timer. `flush()` swallows network errors on purpose: tracking is best-effort. The bottom of the region handles leaving the page, where the browser may cancel in-flight `fetch` calls; `navigator.sendBeacon` queues a small POST that the browser delivers after the page is gone. The `pageHideHooks` set carries a bug story, below.
+
+**What is a beacon, and why is it needed?** When Dewi closes the tab, the browser tears the page down. A normal network request that is still on its way may be cancelled, like a customer leaving before the waiter has finished writing the order. `navigator.sendBeacon` fixes this by handing a small message to the browser itself, which promises to deliver it even though the page is gone. The cost is that you cannot wait for a reply or see an error, which is fine for "the shopper clicked this."
 
 ```include
 path: frontend/src/composables/useTracker.ts
@@ -210,6 +232,8 @@ The method refreshes the store, clamps `k` to 1..50, and takes references to the
 
 ### Retraining without downtime
 
+Retraining means **building the ranking model again from the newest data**. A model is a snapshot of the patterns found in the data it was trained on. As new items are listed and tastes change, the snapshot goes stale, like a recipe book that never mentions this season's dishes. Without retraining, recommendations slowly get worse. The difficulty is doing it while customers keep ordering, which the next paragraphs solve.
+
 The ranker's inputs drift as items appear and tastes shift, so the service retrains on two triggers: a background thread every `RECSYS_RETRAIN_INTERVAL_SEC` (six hours by default) and an admin-only gRPC `Retrain` call behind a button on the "How it works" page.
 
 ```include
@@ -220,6 +244,8 @@ symbol: retrain
 The module-level `retrain` is shared by the service and the CLI. It trains on a store snapshot with `end=now`, so label windows slide with the clock, converts the evaluation table into flat keys such as `lightgbm_ranker/ndcg@20`, and writes `ranker.txt` and `model_meta.json`.
 
 The method adds two safeguards. `retrain_lock.acquire(blocking=False)` makes a second concurrent request fail at once (`ABORTED`, which Rust maps to `409`). And the swap `self.model, self.meta = model, meta` is two reference assignments: in-flight `Recommend` calls keep the old booster and finish consistently, new calls see the new one, with no lock on the read path.
+
+**Why `end=now`: the cutoff at serving time.** In the Preface and Chapter 9 we fixed a past *cutoff* (day 53), hid everything after it, and checked the model against what really happened next. Training still works that way: a model learns by seeing "as of this day, what did people do in the following week?" at many past days. But the retrain job simply uses the *current time* as the latest cutoff, so each retrain slides all of those windows forward. This is also why a retrain gives slightly different metrics even when no code changed. At serving time there is nothing to hide: the future has not happened, so the cutoff is `now`, and `History.at(now)` means "everything known up to this moment."
 
 ## Code walkthrough, part 4: the Rust side of the bridge
 
@@ -253,6 +279,8 @@ region: fallback
 The printed card from our restaurant: active, in-stock items ordered by `order` events in the last seven days, then rating count. It labels every row `source: "trending"`, score 0, no contributions, so the frontend needs no separate path. It is deliberately non-personalised: a degraded experience that is the same for everybody cannot be wrong in a surprising, user-specific way.
 
 ## The contract between languages: one `.proto`, two code generators
+
+A **schema** is an agreed description of the data. Here, a request is "a user id and a count `k`", and a reply is "a list of items, each with an id, a score and some contributions". **gRPC** is the mechanism that carries these messages between two programs; **Protocol Buffers** (protobuf) is the compact format they are written in. The file with the agreed description, `recommender.proto`, is like a printed order form that both waiter and chef use: both are generated from it, so a request written by one side can always be read by the other. Without a shared form, each side would guess at the other's format, and silent mismatches would appear only in production.
 
 The Rust API and the Python service share only a schema, one short file:
 
@@ -308,6 +336,8 @@ file: results/ch13_latency.txt
 
 "server latency_ms" is the service's own measurement; "client wall ms" adds serialisation and the loopback hop. They differ by about a millisecond, so essentially all the time is inside the recommender. Every request scored between 30 and 129 candidates and returned exactly 20 items.
 
+**What is profiling?** When something is slow, guessing the cause usually fails. *Profiling* means timing each stage separately and reading the numbers, like timing every step of preparing a dish to learn whether the chopping, the cooking or the plating makes the table wait. The next script does exactly this for one `Recommend` call.
+
 Where do 840 ms go? The second script, `ch13_profile.py`, runs offline on the simulated data through the very same `pipeline.recommend` path, timing each stage for three users with very different histories (median of 7 runs). It needs no running services:
 
 ```bash
@@ -324,6 +354,8 @@ The per-user table shows totals of 668 to 674 ms for users with 4, 22 and 133 in
 
 ### Latency
 
+**How to read p50, p90 and p99.** Imagine ten requests that took (in seconds) 0.7, 0.7, 0.8, 0.8, 0.8, 0.8, 0.9, 0.9, 0.9 and 1.5. Sort them from fastest to slowest. The **p50** (the 50th percentile, or median) is the middle of the sorted list: half the requests were faster, about 0.8 s. The **p90** is the time that 90% of requests beat, about 0.9 s. The **p99** is the same idea for 99 of every 100 requests; with only ten requests it would sit near the slowest one, 1.5 s. We report percentiles rather than the average because a few slow requests barely move an average but are exactly what an unlucky shopper experiences. The p99 answers: "how bad is it for the unluckiest one shopper in a hundred?"
+
 ![Histogram of server-side Recommend latency over 200 random users, with p50, p90 and p99 marked](../assets/charts/ch13-latency-hist.png)
 
 The histogram shows a compact body between about 770 and 900 ms, and a short tail reaching about 1,010 ms. The median is 839.9 ms, the 90th percentile 892.5 ms and the 99th 985.0 ms. Two observations matter.
@@ -335,6 +367,9 @@ Second, **0.84 s is fine for a demo and too slow for a real home page**. Even th
 ### A screenshot tour
 
 The screenshots come from the running application, captured with Playwright. The other pages follow the same pattern: login sets a JWT in an `httpOnly` cookie; search is plain SQL `ILIKE` that writes `searches` rows; the product page loads `/products/:id/similar` separately, so a failing recommender never blocks it; cart, checkout and orders exercise the writer side; and a freshly listed product in the Seller Center is the cold-start case of Chapter 12.
+
+
+**Two terms from that paragraph.** A *JWT cookie* is the signed "this is user43" note described in the glossary above. The browser attaches it automatically, and the `httpOnly` flag stops page scripts from reading it, so even a buggy script cannot steal the login. And `ILIKE` is SQL's case-insensitive text match: searching "cat" finds "Cat food".
 
 ![A product page with an Add to cart button and a grid of similar items](../assets/screenshots/product-similar.png)
 
