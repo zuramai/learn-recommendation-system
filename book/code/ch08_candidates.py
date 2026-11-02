@@ -39,10 +39,12 @@ def main() -> None:
 
     common.section("Retrievers one by one (eval users: %d, label pairs: %d)" % (len(users), len(labels)))
     pairs = labels[["user_id", "item_id"]]
+    # book:start unique_recall
     covered = {}
     for name, df in per_source.items():
         covered[name] = set(zip(df["user_id"], df["item_id"]))
     label_pairs = set(zip(pairs["user_id"], pairs["item_id"]))
+    # book:end unique_recall
     rows = []
     for name, df in per_source.items():
         others = set().union(*(covered[o] for o in covered if o != name))
