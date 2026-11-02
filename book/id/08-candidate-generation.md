@@ -1,10 +1,21 @@
 # Pembangkitan kandidat multi-sumber
 
-Pukul 12.05 pada hari gajian, halaman utama sebuah marketplace ala Shopee akan dibuka oleh beberapa ratus ribu orang dalam menit yang sama. Masing-masing butuh dua puluh produk dalam sepersekian detik, dari katalog berisi jutaan barang. Seseorang mengusulkan: "Jalankan saja model pemeringkatan terbaik kita pada setiap barang untuk setiap pengguna, lalu urutkan." Hitung-hitungan kasar langsung mengakhiri rapat: bahkan 20 mikrodetik per pasangan (pengguna, barang) berarti puluhan detik waktu CPU per permintaan, dan model yang benar-benar kita inginkan, dengan puluhan fitur per pasangan, jauh lebih lambat.
+Pukul 12.05 pada hari gajian, halaman utama sebuah marketplace ala Shopee akan dibuka oleh beberapa ratus ribu orang dalam menit yang sama. Masing-masing butuh dua puluh produk dalam sepersekian detik, dari katalog berisi jutaan barang. Seseorang mengusulkan: "Jalankan saja model pemeringkatan terbaik kita (program yang menilai seberapa cocok sebuah barang untuk pengguna) pada setiap barang untuk setiap pengguna, lalu urutkan." Hitung-hitungan kasar langsung mengakhiri rapat: bahkan 20 mikrodetik (sepersejuta detik) per pasangan (pengguna, barang) berarti puluhan detik waktu CPU (prosesor) per permintaan, dan model yang benar-benar kita inginkan, dengan puluhan fitur (fakta masukan) per pasangan, jauh lebih lambat.
 
 Maka tim memecah masalah menjadi dua. Tahap yang murah dan luas memilih sekitar seratus barang yang *mungkin* menarik bagi pengguna ini; tahap yang mahal dan presisi hanya meranking barang-barang itu. Bab ini membahas tahap pertama, yaitu **pembangkitan kandidat** (*candidate generation*) atau **retrieval**. Tahap ini menentukan apa saja yang boleh dilihat oleh *ranker*, dan menetapkan batas atas yang keras untuk semua yang terjadi sesudahnya.
 
 Di repositori ini, tahap pertama adalah `recommender/recsys/candidates.py`: empat *retriever* kecil, masing-masing berupa alasan berbeda untuk meyakini bahwa pengguna mungkin menyukai suatu barang, ditambah beberapa filter keras. Simulator memungkinkan kita memberi angka pada setiap klaim.
+
+### Empat kata yang perlu diketahui dulu
+
+Bayangkan pembeli Sari membuka aplikasi. Katalog berisi jutaan barang; ia hanya bisa melihat dua puluh.
+
+- **Kandidat** (*candidate*) adalah barang yang *mungkin* ditampilkan kepada Sari. Ia berupa "mungkin", bukan keputusan. **Kolam kandidat** (*candidate pool*) adalah daftar semua "mungkin" itu untuknya, sekitar seratus barang.
+- **Retriever** (disebut juga *sumber*) adalah potongan kode kecil yang cepat dan mengusulkan kandidat dengan satu alasan, misalnya "Sari melihat kantong makanan kucing ini kemarin". Beberapa *retriever* masing-masing menambahkan barang ke kolam.
+- ***Ranker*** adalah model yang lebih lambat dan lebih pintar dari bab berikutnya. Ia mengambil kolam dan mengurutkan barang untuk Sari. Ia hanya bisa menata ulang apa yang ada di kolam.
+- ***Recall*** adalah porsi barang yang benar-benar akan diinginkan Sari yang berhasil masuk ke kolam. Misalkan ia akan membeli 4 barang minggu depan dan 2 di antaranya ada di kolam: *recall* adalah $2/4 = 50\%$. Jika 2 lainnya tidak ada, tidak ada *ranker* yang bisa menampilkannya, secerdas apa pun.
+
+Bandingkan dengan asisten toko yang lebih dulu mengambil satu troli berisi 100 produk dari gudang (*retrieval*) dan baru kemudian menata 20 terbaik di meja (*ranking*). Asisten itu tidak bisa menata barang yang masih di gudang. Karena itulah bab ini penting: kolam menentukan apa yang *mungkin*.
 
 **Yang akan Anda pelajari**
 
@@ -22,7 +33,7 @@ Perhatikan bahwa pustakawan memakai *beberapa* naluri, karena masing-masing gaga
 
 ## Mengapa dua tahap: corong
 
-Misalkan katalog berisi $N$ barang dan kita melayani $U$ permintaan per detik. Menilai setiap barang dengan *ranker* yang butuh $c$ detik per pasangan memerlukan $U \cdot N \cdot c$ detik komputasi setiap detiknya. Dengan $N$ jutaan, bahkan $c$ yang murah pun tak terjangkau, karena *ranker* yang bagus membutuhkan fitur yang dihitung *per pasangan*: riwayat pengguna dengan barang ini, *click-through rate* terkininya, kualitas toko.
+Misalkan katalog berisi $N$ barang dan kita melayani $U$ permintaan per detik. Menilai setiap barang dengan *ranker* yang butuh $c$ detik per pasangan memerlukan $U \cdot N \cdot c$ detik komputasi setiap detiknya. Dengan $N$ jutaan, bahkan $c$ yang murah pun tak terjangkau, karena *ranker* yang bagus membutuhkan fitur yang dihitung *per pasangan*: riwayat pengguna dengan barang ini, *click-through rate* terkininya (porsi orang yang melihatnya lalu mengkliknya), kualitas toko.
 
 Corong menyelesaikan ini dengan membelanjakan komputasi di tempat yang berguna. Setiap tahap melihat lebih sedikit barang sehingga mampu menghabiskan lebih banyak komputasi per barang:
 
@@ -36,6 +47,8 @@ flowchart TD
 *Gambar: Corong rekomendasi. Setiap tahap melihat lebih sedikit barang dan dapat menghabiskan lebih banyak komputasi per barang. Filter keras bekerja di titik paling awal.*
 
 Tiga sifat menyusul. **Recall adalah metrik tahap pertama:** dari barang yang nantinya disukai pengguna, berapa banyak yang ada dalam daftar pendek saya? Urutan di dalam daftar pendek tidak penting dan *precision* bersifat sekunder, karena *ranker* yang membersihkan positif palsu. **Daftar pendek adalah batas atas:** jika klik di masa depan tidak ada dalam himpunan kandidat, tidak ada *ranker* yang dapat merekomendasikannya. Inilah *recall ceiling*. **Murah lebih penting daripada elegan:** sebuah *retriever* sebaiknya berupa pencarian indeks, *group-by*, atau kueri tetangga terdekat; apa pun yang membutuhkan fitur per pasangan termasuk tahap kedua.
+
+Berikut gagasan *recall* dengan angka yang bisa Anda cek sendiri. Misalkan Sari kemudian mengklik barang $\{P, Q, R, S\}$ pada minggu berikutnya. *Retriever* 1 mengusulkan $\{P, X, Y\}$, *retriever* 2 mengusulkan $\{P, Q, Z\}$. Kolamnya adalah gabungan (*union*, semua yang diusulkan salah satunya): $\{P, Q, X, Y, Z\}$. Klik Sari yang ditemukan di kolam adalah $P$ dan $Q$, sehingga *recall* $2/4 = 50\%$. Barang $R$ dan $S$ adalah *batas atas* yang bekerja: tidak ada yang di hilir bisa mengembalikannya. *Retriever* 2 saja sudah menemukan $P$ dan $Q$, jadi *retriever* 1 tidak menambahkan apa pun yang baru diinginkan Sari. Kita akan mengukur persis hal ini nanti, sebagai *unique recall*.
 
 ::: fact
 **Dua jaringan, satu corong.** Sistem rekomendasi YouTube, sebagaimana dipublikasikan oleh Covington, Adams, dan Sargin, dibagi menjadi tepat dua jaringan saraf: satu untuk pembangkitan kandidat dan satu untuk pemeringkatan. Jaringan pembangkit kandidat menerima riwayat aktivitas pengguna dan mengambil sebagian kecil, "ratusan" video, dari korpus berisi jutaan; jaringan pemeringkat kemudian menilai himpunan kecil itu dengan himpunan fitur yang jauh lebih kaya. Para penulis menunjukkan bahwa rancangan dua tahap ini memungkinkan mereka merekomendasikan dari korpus yang sangat besar sambil tetap yakin bahwa beberapa video yang ditampilkan bersifat personal, dan juga memungkinkan mereka memadukan kandidat yang dihasilkan oleh sumber lain.
@@ -56,7 +69,9 @@ Setiap *retriever* menjawab pertanyaan berbeda dan diam untuk kelompok pengguna 
 | `catpop` | Apa yang populer di kategori yang *Anda* sukai? | "Rak terlaris yang Anda jelajahi" | Pengguna tanpa klik *dan* tanpa pencarian |
 | `global_trending` | Apa yang sedang ramai bagi semua orang saat ini? | "Etalase di depan toko" | Tak seorang pun. Daftarnya sama untuk semua |
 
-Semuanya berbagi peluruhan waktu eksponensial (gagasan dari Bab 3) dan pemotongan "top-n per pengguna" agar tidak ada sumber yang membanjiri kolam kandidat:
+Semuanya berbagi peluruhan waktu eksponensial (gagasan dari Bab 3: aksi yang lebih lama bobotnya makin kecil) dan pemotongan "top-n per pengguna" agar tidak ada sumber yang membanjiri kolam kandidat:
+
+Dua gagasan muncul di kode di bawah. **Peluruhan waktu** (*time decay*) berarti aksi lama dihitung lebih kecil daripada aksi baru, seperti berita kemarin dibanding berita bulan lalu. Kita memakai **waktu paruh** (*half-life*): setelah 7 hari sebuah aksi dihitung separuhnya, setelah 14 hari seperempatnya, dan seterusnya. Pemotongan **top-n per pengguna** berarti setiap *retriever* hanya menyimpan $n$ barang terbaiknya untuk tiap pengguna, sehingga tidak ada satu sumber pun yang membanjiri kolam dengan ratusan barang. (Jika daftar "recent" berisi 500 barang, ia akan mendesak sumber lain.)
 
 ```include
 path: recommender/recsys/candidates.py
@@ -67,6 +82,8 @@ symbol: _decay
 path: recommender/recsys/candidates.py
 symbol: _top_per_user
 ```
+
+Rumus di bawah punya tiga bagian: $w$ adalah seberapa kuat aksinya (klik lemah, pesanan kuat), $a$ adalah berapa hari lalu aksi itu terjadi, dan $2^{-a/7}$ adalah faktor pemudarnya. Pada $a=0$ nilainya 1 (kekuatan penuh), pada $a=7$ nilainya $\tfrac12$.
 
 Dengan `HALF_LIFE_DAYS = 7.0`, untuk sebuah aksi berbobot $w$ yang terjadi $a$ hari sebelum *cutoff*:
 
@@ -91,12 +108,18 @@ Ini tampak terlalu sepele untuk berguna, tetapi pembeli memang kembali ke barang
 
 Ko-kunjungan (*co-visitation*) adalah *collaborative filtering* item-ke-item berbasis sesi dari Bab 5. `covisitation_matrix` menghitung seberapa sering dua barang menerima aksi positif dalam sesi yang sama dalam 30 hari dan menormalkannya per barang sumber, sehingga setiap baris berjumlah 1: distribusi $w(a \to b)$ atas barang $b$ yang biasanya menyertai $a$.
 
+**Sesi** (*session*) adalah satu kali kunjungan ke aplikasi, rangkaian aktivitas yang berkelanjutan. Gagasan ko-kunjungan sederhana: jika banyak pembeli yang melihat casing ponsel dalam satu sesi juga melihat pelindung layar dalam sesi yang sama, kedua barang itu "bertetangga". "Menormalkan per barang sumber" berarti kita mengubah hitungan menjadi porsi. Misalkan setelah casing ponsel A, 30 sesi menyentuh barang C dan 70 sesi menyentuh barang D: baris untuk A menjadi $C = 0.3$, $D = 0.7$, yang berjumlah 1.
+
+
 *Retriever* `covisit` kemudian bergerak dari barang-barang terbaru terbaik milik pengguna ke tetangganya:
 
 ```include
 path: recommender/recsys/candidates.py
 symbol: covisit
 ```
+
+
+Anggap ini sebuah pemungutan suara. Setiap barang yang baru-baru ini disentuh pengguna (sebuah **seed**, "benih" yang tumbuh menjadi daftar tetangga) memberikan suara kepada tetangganya. *Seed* yang lebih kuat dan lebih baru bersuara lebih keras, dan tetangga yang dipilih beberapa *seed* mendapat total suara terbanyak.
 
 Skor sebuah tetangga $b$ adalah suara berbobot dari para *seed* pengguna:
 
@@ -109,6 +132,9 @@ dengan `seeds(u)` adalah sepuluh barang terbaru terkuat milik pengguna (`N_SEEDS
 ### Retriever 3: `catpop`
 
 *Retriever* ketiga bekerja pada *kategori*, bukan barang. Pertama ia membangun tabel minat pengguna-per-kategori, `category_affinity`:
+
+
+**Afinitas** (*affinity*) adalah ukuran seberapa besar seseorang menyukai sesuatu, di sini seberapa besar Sari menyukai tiap kategori produk (kelompok seperti Pets atau Beauty). Untuk Sari, jika 6 dari 10 aksi berbobotnya tentang Pets dan 4 tentang Beauty, afinitasnya adalah 60% Pets dan 40% Beauty.
 
 ```include
 path: recommender/recsys/candidates.py
@@ -165,7 +191,18 @@ Terakhir, anggap afinitas pengguna adalah 60% Pets dan 40% Beauty. Sebuah barang
 
 ## Menggabungkan sumber: `generate`
 
-Kini kita punya empat tabel dengan bentuk berbeda: `recent`, `covisit`, dan `catpop` berkunci (pengguna, barang) dengan kolom skornya sendiri, sedangkan `global_trending` adalah daftar yang tak bergantung pada pengguna. `generate` menjahitnya:
+Kini kita punya empat tabel dengan bentuk berbeda: `recent`, `covisit`, dan `catpop` berkunci (pengguna, barang) dengan kolom skornya sendiri, sedangkan `global_trending` adalah daftar yang tak bergantung pada pengguna. `generate` menjahitnya.
+
+Sebelum kodenya, catatan singkat tentang alat yang dipakai. **Join** menempelkan dua tabel dengan mencocokkan baris pada sebuah kunci. **Outer join** mempertahankan baris meskipun hanya satu tabel yang memilikinya, dan mengisi celahnya dengan "hilang" (null). Contoh kecil untuk Sari, dengan kunci berupa barang:
+
+| barang | skor `recent` | skor `covisit` |
+|---|---|---|
+| A | 0.5 | *hilang* |
+| B | 1.25 | 0.4 |
+| C | *hilang* | 0.75 |
+
+Barang B, yang diusulkan kedua sumber, muncul dalam **satu** baris dengan kedua skor terisi, bukan dua baris. Penggabungan beberapa usulan menjadi satu baris itu adalah **deduplikasi** (membuang duplikat). Sel yang *hilang* mencatat **atribusi sumber**: sumber mana yang menominasikan barang itu (A hanya dari `recent`, C hanya dari `covisit`). *Inner join*, sebaliknya, hanya akan menyimpan B, yaitu barang yang diusulkan setiap sumber, dan membuang hampir semuanya.
+
 
 ```include
 path: recommender/recsys/candidates.py
@@ -174,17 +211,28 @@ symbol: generate
 
 Telusuri dalam empat gerakan.
 
-**1. Gabungan lewat outer join.** Daftar global di-*cross-join* dengan daftar pengguna sehingga setiap pengguna mendapat 30 baris yang sama. Lalu sumber-sumber digabung dengan `how="outer"` pada `(user_id, item_id)`. Barang yang diusulkan sumber mana pun bertahan. Barang yang diusulkan dua sumber menjadi *satu baris dengan dua kolom skor tak-null*, bukan dua baris. Inilah keputusan desain terpenting dalam fungsi ini: unit tahap pemeringkatan adalah pasangan (pengguna, barang), dan sumber-sumber itu adalah *fitur dari pasangan tersebut*.
+**1. Gabungan lewat outer join.** Daftar global di-*cross-join* dengan daftar pengguna (**cross join** memasangkan setiap baris satu tabel dengan setiap baris tabel lain) sehingga setiap pengguna mendapat 30 baris yang sama. Lalu sumber-sumber digabung dengan `how="outer"` pada `(user_id, item_id)`. Barang yang diusulkan sumber mana pun bertahan. Barang yang diusulkan dua sumber menjadi *satu baris dengan dua kolom skor tak-null*, bukan dua baris. Inilah keputusan desain terpenting dalam fungsi ini: unit tahap pemeringkatan adalah pasangan (pengguna, barang), dan sumber-sumber itu adalah *fitur dari pasangan tersebut*.
 
 **2. Filter ketersediaan.** `cands["item_id"].isin(available["item_id"])` membuang apa pun yang stoknya habis *pada saat cutoff*. `History.at` membuang waktu kehabisan stok di masa depan, sehingga filter hanya memakai informasi yang tersedia saat permintaan.
 
-**3. Filter barang tersembunyi.** Tombol "Not interested" mencatat event `hide`. `generate` melakukan *left join* untuk setiap pasangan `(user, item)` yang memiliki event tersebut sebagai kolom penanda, lalu membuang yang cocok: sebuah *filter keras* pada kolam, bukan fitur.
+**3. Filter barang tersembunyi.** Tombol "Not interested" mencatat event `hide`. `generate` melakukan *left join* untuk setiap pasangan `(user, item)` yang memiliki event tersebut sebagai kolom penanda (**left join** mempertahankan setiap baris kolam dan menempelkan penanda bila ada yang cocok), lalu membuang yang cocok: sebuah *filter keras* pada kolam, bukan fitur.
 
 **4. Pembukuan sumber.** Terakhir fungsi menghitung `cand_n_sources`, jumlah sumber yang mengusulkan pasangan itu, *sebelum* ia mengganti skor yang hilang dengan 0.0 (dan peringkat global yang hilang dengan 999). Urutan penting di sini, dan kita akan memakainya sebagai soal kuis: begitu `fillna` dijalankan pada ketiga kolom skor, kolom-kolom itu tidak pernah null lagi, sehingga masing-masing akan dihitung sebagai sumber untuk setiap baris.
+
+Contoh kecil mengapa urutan itu penting. Misalkan sebuah barang diusulkan oleh `recent` dan `covisit` tetapi tidak oleh `catpop` (abaikan `global_trending` agar sederhana). `fillna(0.0)` berarti "ganti setiap sel yang hilang dengan 0.0":
+
+| Saat | `recent` | `covisit` | `catpop` | sumber yang terhitung |
+|---|---|---|---|---|
+| Sebelum `fillna` | 1.25 | 0.75 | *hilang* | 2 (hitung sel yang tidak hilang) |
+| Sesudah `fillna` | 1.25 | 0.75 | 0.0 | 3 (salah: `catpop` tidak pernah mengusulkannya) |
+
+Setelah `fillna` kita tidak bisa lagi membedakan "diusulkan dengan skor 0" dari "tidak diusulkan", jadi kita menghitung lebih dulu.
 
 ## Mengukur retriever: recall, pair recall, dan unique recall
 
 Bagaimana kita tahu bahwa sebuah *retriever* bagus? Dengan aturan dari Bab 2 kita butuh pemisahan waktu: kita membangun kandidat dari riwayat sebelum *cutoff*, lalu melihat apa yang sebenarnya dilakukan pengguna dalam tujuh hari berikutnya (yaitu *label*, di sini 947 pengguna evaluasi dengan 3,357 pasangan (pengguna, barang) positif). Pertanyaan untuk setiap *retriever* kemudian: berapa porsi positif masa depan itu yang ia cakup?
+
+Kata **label** berarti jawaban benar yang kita sembunyikan dari *retriever*, di sini "apa yang sebenarnya dilakukan Sari berikutnya". **Terkumpul** (*pooled*) berarti kita menaruh pasangan semua orang ke dalam satu tumpukan besar dan menghitung bersama, alih-alih merata-ratakan per orang.
 
 Skrip pendamping `book/code/ch08_candidates.py` menghitung tiga angka per sumber:
 
@@ -223,7 +271,7 @@ Empat pengamatan, dikaitkan dengan angkanya.
 
 **Setiap sumber membawa nilai unik, tetapi tidak sama besar.** `catpop` menemukan 9.68% dari semua pasangan positif yang tidak ditemukan siapa pun, `covisit` 5.24%, `recent` 2.98%, dan `global_trending` 2.53%. Daftar *trending* punya *recall* terendah tetapi nilai unik hampir sama besar dengan `recent`: ia jaring pengaman murah untuk positif yang tak dijangkau sumber personal mana pun.
 
-**Bahkan gabungan pun melewatkan lebih dari separuh masa depan.** Batas atas 0.4645 berarti 53.55% dari apa yang diklik, ditambahkan ke keranjang, atau dipesan pengguna dalam seminggu tidak pernah ditawarkan kepada *ranker*. Sebagian tak terhindarkan (penemuan lewat pencarian, iklan, teman); sebagian dapat ditangani dengan lebih banyak sumber, seperti *retrieval two-tower* dari Bab 7.
+**Bahkan gabungan pun melewatkan lebih dari separuh masa depan.** Batas atas 0.4645 berarti 53.55% dari apa yang diklik, ditambahkan ke keranjang, atau dipesan pengguna dalam seminggu tidak pernah ditawarkan kepada *ranker*. Sebagian tak terhindarkan (penemuan lewat pencarian, iklan, teman); sebagian dapat ditangani dengan lebih banyak sumber, seperti *retrieval two-tower* dari Bab 7 (model yang menaruh pengguna dan barang pada "peta" yang sama dan mengambil barang terdekat dari pengguna).
 
 *Recall* sebagai fungsi dari berapa banyak kandidat yang kita simpan digambarkan di bawah (nilainya ada di `results/ch08_candidates.json`). Setiap sumber diurutkan menurut skornya sendiri dan gabungan menurut *heuristic blend* milik repo.
 
@@ -241,7 +289,7 @@ Sumber: Covington et al., RecSys, 2016
 
 Tingkat itu naik secara monoton menurut jumlah sumber (tabel per jumlah ada di `results/ch08_candidates.txt`): 0.0090, 0.0319, 0.0806, dan 0.1817. Setiap *retriever* tambahan yang secara independen mengusulkan sebuah barang menaikkan peluang bahwa pengguna menginginkannya, dan *ranker* berbasis pohon memakai sinyal ini dengan intens.
 
-Diurutkan dengan *heuristic blend* buatan tangan milik repo tanpa pembelajaran sama sekali, gabungan itu sudah meraih NDCG@20 sebesar 0.1674 dengan *coverage* 0.5682 (porsi katalog berstok yang muncul di 20 teratas seseorang). *Ranker* terlatih di Bab 10 memperbaikinya pada kolam yang sama, selalu *di dalam batas atas yang digambar bab ini*.
+Diurutkan dengan *heuristic blend* buatan tangan milik repo (jumlah berbobot tetap dari skor sumber, tanpa pembelajaran sama sekali), gabungan itu sudah meraih NDCG@20 sebesar 0.1674 (skor kualitas peringkat dari Bab 2: makin tinggi bila barang relevan berada dekat puncak 20 teratas) dengan *coverage* 0.5682 (porsi katalog berstok yang muncul di 20 teratas seseorang). *Ranker* terlatih di Bab 10 memperbaikinya pada kolam yang sama, selalu *di dalam batas atas yang digambar bab ini*.
 
 ::: fact
 **Dibangun untuk skala dan waktu nyata.** Linden, Smith, dan York menggambarkan *collaborative filtering* item-ke-item milik Amazon sebagai jawaban atas pengecer dengan "puluhan juta pelanggan dan jutaan barang katalog yang berbeda" yang halamannya harus dikembalikan secara *real time*, tidak lebih dari setengah detik. Komputasi daring algoritmanya berskala independen dari jumlah pelanggan dan jumlah barang katalog, karena kerja item-ke-item yang mahal tidak dilakukan per permintaan. *Retriever* `covisit` punya semangat yang sama: matriks ko-kunjungan merangkum 30 hari sesi, dan saat melayani ia hanya digabungkan dengan sepuluh barang *seed* pengguna.
@@ -289,6 +337,8 @@ Baris *union* memanggil `candidates.generate` yang asli, sehingga skrip mengukur
 :::
 
 **Cara sistem produksi melakukannya.** Marketplace sungguhan menjalankan jauh lebih banyak *retriever* secara paralel, masing-masing dengan anggaran latensinya sendiri: *retrieval* embedding dengan indeks tetangga terdekat aproksimasi (Bab 7), *retrieval* berbasis sesi, "toko yang sama dengan barang yang Anda pesan", "sering dibeli bersama", daftar kampanye. Langkah penggabungan menerapkan kuota per sumber dan mendeduplikasi menurut barang; filter keras dijalankan terhadap penyimpanan cepat seperti daftar blokir *key-value*; dan *recall* offline pada ukuran kolam adalah pekerjaan harian yang dipantau.
+
+Dua istilah dari paragraf itu. **Kuota** (*quota*) adalah jumlah slot tetap yang disediakan untuk tiap sumber, misalnya "paling banyak 30 dari `catpop`, paling banyak 20 dari `recent`", agar satu sumber yang cerewet tidak mengambil seluruh kolam. **Deduplikasi menurut barang** berarti jika tiga sumber mengusulkan kantong makanan kucing yang sama, kolam menyimpan satu salinan, bukan tiga, tetapi tetap mengingat ketiga penominasinya (atribusi tadi). **Indeks tetangga terdekat aproksimasi** (*approximate nearest-neighbour*, ANN) adalah struktur data yang menemukan "barang yang mirip dengan ini" dengan cepat, dengan menerima bahwa ia kadang melewatkan kecocokan terbaik yang tepat.
 
 ## Ringkasan
 

@@ -1,10 +1,21 @@
 # Multi-source candidate generation
 
-It is 12:05 on a payday, and the home page of a Shopee-like marketplace is about to be opened by a few hundred thousand people in the same minute. Each needs twenty products in a fraction of a second, from a catalogue of millions of items. Somebody proposes: "Let's run our best ranking model on every item for every user and sort." A back-of-the-envelope calculation ends the meeting: even 20 microseconds per (user, item) pair means tens of seconds of CPU per request, and the model we really want, with dozens of features per pair, is far slower.
+It is 12:05 on a payday, and the home page of a Shopee-like marketplace is about to be opened by a few hundred thousand people in the same minute. Each needs twenty products in a fraction of a second, from a catalogue of millions of items. Somebody proposes: "Let's run our best ranking model (the program that scores how well an item suits a user) on every item for every user and sort." A back-of-the-envelope calculation ends the meeting: even 20 microseconds (millionths of a second) per (user, item) pair means tens of seconds of CPU (processor) time per request, and the model we really want, with dozens of features (input facts) per pair, is far slower.
 
 So the team splits the problem in two. A cheap, broad stage picks a hundred or so items that *might* interest this user; an expensive, precise stage ranks only those. This chapter is about the first stage, **candidate generation** or **retrieval**. It decides what the ranker is even allowed to see, and it sets a hard ceiling on everything downstream.
 
 In this repository the first stage is `recommender/recsys/candidates.py`: four small retrievers, each a different reason to believe a user may like an item, plus a couple of hard filters. The simulator lets us put numbers on every claim.
+
+### Four words to know before we start
+
+Think of shopper Sari opening the app. The catalogue holds millions of items; she can look at twenty.
+
+- A **candidate** is an item that *might* be shown to Sari. It is a "maybe", not a decision. The **candidate pool** is the list of all maybes for her, about a hundred items.
+- A **retriever** (also called a *source*) is a small, fast piece of code that proposes candidates for one reason, for example "Sari looked at these cat-food bags yesterday". Several retrievers each add items to the pool.
+- The **ranker** is the slower, smarter model of a later chapter. It takes the pool and puts the items in order for Sari. It can only reorder what the pool contains.
+- **Recall** is the share of the items Sari will really want that made it into the pool. Suppose she will buy 4 things next week and 2 of them are in the pool: recall is $2/4 = 50\%$. If the other 2 are missing, no ranker can ever show them, however clever it is.
+
+Compare this with a shop assistant who first fetches a trolley of 100 products from the warehouse (retrieval) and only then lays out the best 20 on the counter (ranking). The assistant cannot lay out something that is still in the warehouse. That is why this chapter matters: the pool decides what is *possible*.
 
 **What you'll learn**
 
@@ -22,7 +33,7 @@ Notice that the librarian uses *several* instincts, because each fails different
 
 ## Why two stages: the funnel
 
-Suppose the catalogue has $N$ items and we serve $U$ requests per second. Scoring every item with a ranker that costs $c$ seconds per pair needs $U \cdot N \cdot c$ seconds of compute every second. With $N$ in the millions, even a cheap $c$ is unaffordable, because a good ranker needs features computed *per pair*: the user's history with this item, its recent click-through rate, the shop's quality.
+Suppose the catalogue has $N$ items and we serve $U$ requests per second. Scoring every item with a ranker that costs $c$ seconds per pair needs $U \cdot N \cdot c$ seconds of compute every second. With $N$ in the millions, even a cheap $c$ is unaffordable, because a good ranker needs features computed *per pair*: the user's history with this item, its recent click-through rate (the share of people who saw it and clicked), the shop's quality.
 
 The funnel solves this by spending compute where it pays. Each stage looks at fewer items and may therefore afford more computation per item:
 
@@ -36,6 +47,8 @@ flowchart TD
 *Figure: The recommendation funnel. Each stage sees fewer items and can spend more compute per item. Hard filters act at the earliest possible point.*
 
 Three properties follow. **Recall is the metric of stage one:** of the items the user will go on to like, how many are inside my shortlist? Order inside the shortlist is irrelevant and precision is secondary, because the ranker cleans up false positives. **The shortlist is an upper bound:** if a future click is not in the candidate set, no ranker can recommend it. This is the *recall ceiling*. **Cheapness beats elegance:** a retriever should be an index lookup, a group-by or a nearest-neighbour query; anything needing per-pair features belongs in stage two.
+
+Here is the recall idea with numbers you can check by hand. Say Sari goes on to click items $\{P, Q, R, S\}$ the next week. Retriever 1 proposes $\{P, X, Y\}$, retriever 2 proposes $\{P, Q, Z\}$. The pool is the union (everything either one proposed): $\{P, Q, X, Y, Z\}$. Sari's clicks found in the pool are $P$ and $Q$, so recall is $2/4 = 50\%$. Items $R$ and $S$ are the *ceiling* in action: nothing downstream can bring them back. Retriever 2 alone also found $P$ and $Q$, so retriever 1 added nothing new that Sari wanted. We will measure exactly this later, as *unique recall*.
 
 ::: fact
 **Two networks, one funnel.** YouTube's recommender, as published by Covington, Adams and Sargin, is split into exactly two neural networks: one for candidate generation and one for ranking. The candidate generation network takes the user's activity history and retrieves a small subset, "hundreds" of videos, from a corpus of millions; the ranking network then scores that small set using a much richer set of features. The authors point out that this two-stage design lets them recommend from a very large corpus while still being sure that the few videos shown are personalised, and that it also lets them blend candidates generated by other sources.
@@ -56,7 +69,9 @@ Each retriever answers a different question and is silent for a different group 
 | `catpop` | What is popular in the categories *you* like? | "The best-selling shelf you browse" | Users with no clicks *and* no searches |
 | `global_trending` | What is hot for everybody right now? | "The front-of-store display" | Nobody. It is the same list for everyone |
 
-All of them share an exponential time decay (the idea from Chapter 3) and a "top-n per user" cut so no source floods the pool:
+All of them share an exponential time decay (the idea from Chapter 3: older actions count less) and a "top-n per user" cut so no source floods the pool:
+
+Two ideas appear in the code below. **Time decay** means that an old action counts less than a fresh one, like yesterday's news versus last month's. We use a **half-life**: after 7 days an action counts half as much, after 14 days a quarter, and so on. A **top-n per user** cut means that each retriever keeps only its best $n$ items for each user, so no single source can flood the pool with hundreds of items. (If a "recent" list had 500 items, it would crowd out the other sources.)
 
 ```include
 path: recommender/recsys/candidates.py
@@ -67,6 +82,8 @@ symbol: _decay
 path: recommender/recsys/candidates.py
 symbol: _top_per_user
 ```
+
+The formula below has three parts: $w$ is how strong the action was (a click is weak, an order is strong), $a$ is how many days ago it happened, and $2^{-a/7}$ is the fading factor. At $a=0$ it equals 1 (full strength), at $a=7$ it equals $\tfrac12$.
 
 With `HALF_LIFE_DAYS = 7.0`, for an action of strength $w$ that happened $a$ days before the cutoff:
 
@@ -91,12 +108,18 @@ This looks too trivial to be useful, but shoppers revisit things: they look at a
 
 Co-visitation is the session-based item-to-item collaborative filtering of Chapter 5. `covisitation_matrix` counts how often two items received a positive action in the same session within 30 days and normalises per source item, so each row sums to 1: a distribution $w(a \to b)$ over the items $b$ that usually accompany $a$.
 
+A **session** is one visit to the app, a stretch of continuous activity. The idea of co-visitation is simple: if many shoppers who looked at a phone case in one session also looked at a screen protector in the same session, the two items are "neighbours". "Normalises per source item" means we turn counts into shares. Say that after phone case A, 30 sessions touched item C and 70 touched item D: the row for A becomes $C = 0.3$, $D = 0.7$, which sums to 1.
+
+
 The `covisit` retriever then walks from the user's best recent items to their neighbours:
 
 ```include
 path: recommender/recsys/candidates.py
 symbol: covisit
 ```
+
+
+Think of it as a vote. Each item the user touched recently (a **seed**, as in "a seed that grows into a list of neighbours") casts votes for its neighbours. A stronger and fresher seed has a louder vote, and a neighbour that several seeds vote for gets the most votes in total.
 
 The score of a neighbour $b$ is a weighted vote of the user's seeds:
 
@@ -109,6 +132,9 @@ where `seeds(u)` is the user's ten strongest recent items (`N_SEEDS = 10`) and w
 ### Retriever 3: `catpop`
 
 The third retriever works on *categories* rather than items. First it builds a user-by-category interest table, `category_affinity`:
+
+
+An **affinity** is a measure of how much someone likes something, here how much Sari likes each product category (a group such as Pets or Beauty). For Sari, if 6 of her 10 weighted actions were about Pets and 4 about Beauty, her affinity is 60% Pets and 40% Beauty.
 
 ```include
 path: recommender/recsys/candidates.py
@@ -165,7 +191,18 @@ Finally, say the user's affinity is 60% Pets and 40% Beauty. A pet-food item wit
 
 ## Combining the sources: `generate`
 
-We now have four tables with different shapes: `recent` and `covisit` and `catpop` are keyed by (user, item) with their own score column, while `global_trending` is a user-independent list. `generate` stitches them together:
+We now have four tables with different shapes: `recent` and `covisit` and `catpop` are keyed by (user, item) with their own score column, while `global_trending` is a user-independent list. `generate` stitches them together.
+
+Before the code, a short note on the tool it uses. A **join** glues two tables together by matching rows on a key. An **outer join** keeps rows even when only one table has them, and fills the gaps with "missing" (null). A tiny example for Sari, whose key is the item:
+
+| item | `recent` score | `covisit` score |
+|---|---|---|
+| A | 0.5 | *missing* |
+| B | 1.25 | 0.4 |
+| C | *missing* | 0.75 |
+
+Item B, proposed by both sources, appears in **one** row with both scores filled in, not in two rows. That merging of several proposals into one row is **deduplication** (removing duplicates). The *missing* cells record **source attribution**: which sources nominated the item (A came only from `recent`, C only from `covisit`). An *inner* join, by contrast, would keep only B, the items proposed by every source, and throw away almost everything.
+
 
 ```include
 path: recommender/recsys/candidates.py
@@ -174,17 +211,28 @@ symbol: generate
 
 Walk through it in four movements.
 
-**1. Union by outer join.** The global list is cross-joined with the user list so that every user gets the same 30 rows. Then the sources are merged with `how="outer"` on `(user_id, item_id)`. An item proposed by any source survives. An item proposed by two sources becomes *one row with two non-null score columns*, not two rows. This is the single most important design decision in the function: the unit of the ranking stage is the (user, item) pair, and the sources are *features of that pair*.
+**1. Union by outer join.** The global list is cross-joined with the user list (a **cross join** pairs every row of one table with every row of the other) so that every user gets the same 30 rows. Then the sources are merged with `how="outer"` on `(user_id, item_id)`. An item proposed by any source survives. An item proposed by two sources becomes *one row with two non-null score columns*, not two rows. This is the single most important design decision in the function: the unit of the ranking stage is the (user, item) pair, and the sources are *features of that pair*.
 
 **2. Availability filter.** `cands["item_id"].isin(available["item_id"])` removes anything out of stock *at the cutoff*. `History.at` drops the future stock-out time, so the filter uses only information available at request time.
 
-**3. The hidden filter.** The "Not interested" button logs a `hide` event. `generate` left-joins every `(user, item)` pair with such an event as a marker column and drops the matches: a *hard filter* on the pool, not a feature.
+**3. The hidden filter.** The "Not interested" button logs a `hide` event. `generate` left-joins every `(user, item)` pair with such an event as a marker column (a **left join** keeps every row of the pool and attaches a marker where a match exists) and drops the matches: a *hard filter* on the pool, not a feature.
 
 **4. Source bookkeeping.** Finally the function computes `cand_n_sources`, the number of sources that proposed the pair, *before* it replaces missing scores with 0.0 (and the missing global rank with 999). Order matters here, and we will use it as a quiz question: once `fillna` has run on the three score columns, they are never null, so each would count as a source for every row.
+
+A tiny example of why that order matters. Say an item was proposed by `recent` and `covisit` but not by `catpop` (and ignore `global_trending` for simplicity). `fillna(0.0)` means "replace every missing cell with 0.0":
+
+| Moment | `recent` | `covisit` | `catpop` | counted sources |
+|---|---|---|---|---|
+| Before `fillna` | 1.25 | 0.75 | *missing* | 2 (count the non-missing cells) |
+| After `fillna` | 1.25 | 0.75 | 0.0 | 3 (wrong: `catpop` never proposed it) |
+
+After `fillna` we can no longer tell "proposed with score 0" from "not proposed", so we count first.
 
 ## Measuring retrievers: recall, pair recall and unique recall
 
 How do we know that a retriever is good? By the rule from Chapter 2 we need a time split: we build candidates from history before the cutoff, and look at what the user actually did in the following seven days (the *labels*, here 947 evaluation users with 3,357 positive (user, item) pairs). The question for each retriever is then: what share of those future positives does it contain?
+
+The word **label** means the correct answer we hide from the retriever, here "what Sari actually did next". **Pooled** means we put everyone's pairs into one big heap and count together, instead of averaging per person.
 
 The companion script `book/code/ch08_candidates.py` computes three numbers per source:
 
@@ -223,7 +271,7 @@ Four observations, tied to the numbers.
 
 **Every source carries unique value, but unequally.** `catpop` finds 9.68% of all positive pairs that nobody else finds, `covisit` 5.24%, `recent` 2.98% and `global_trending` 2.53%. The trending list has the lowest recall yet almost as much unique value as `recent`: it is the cheap safety net for positives no personalised source reached.
 
-**Even the union misses over half of the future.** A ceiling of 0.4645 means 53.55% of what users click, add or order within the week is never offered to the ranker. Some of it is irreducible (discovery through search, ads, friends); some is addressable with more sources, such as Chapter 7's two-tower retrieval.
+**Even the union misses over half of the future.** A ceiling of 0.4645 means 53.55% of what users click, add or order within the week is never offered to the ranker. Some of it is irreducible (discovery through search, ads, friends); some is addressable with more sources, such as Chapter 7's two-tower retrieval (a model that places users and items in the same "map" and fetches the items nearest to the user).
 
 Recall as a function of how many candidates we keep is plotted below (the values are in `results/ch08_candidates.json`). Each source is ranked by its own score and the union by the repo's heuristic blend.
 
@@ -241,7 +289,7 @@ Source: Covington et al., RecSys, 2016
 
 The rate rises monotonically with the number of sources (the per-count table is in `results/ch08_candidates.txt`): 0.0090, 0.0319, 0.0806 and 0.1817. Each extra retriever that independently proposes an item raises the odds that the user wants it, and a tree-based ranker uses this signal heavily.
 
-Ranked by the repo's hand-made heuristic blend with no learning at all, the union already scores an NDCG@20 of 0.1674 with a coverage of 0.5682 (the share of the in-stock catalogue appearing in somebody's top 20). Chapter 10's learned ranker improves on this on the same pool, always *inside the ceiling this chapter draws*.
+Ranked by the repo's hand-made heuristic blend (a fixed weighted sum of the source scores, with no learning at all), the union already scores an NDCG@20 of 0.1674 (a ranking-quality score from Chapter 2: higher when relevant items sit near the top of the top 20) with a coverage of 0.5682 (the share of the in-stock catalogue appearing in somebody's top 20). Chapter 10's learned ranker improves on this on the same pool, always *inside the ceiling this chapter draws*.
 
 ::: fact
 **Built for scale and for real time.** Linden, Smith and York describe Amazon's item-to-item collaborative filtering as a response to a retailer with "tens of millions of customers and millions of distinct catalog items" whose pages must be returned in real time, in no more than half a second. Their algorithm's online computation scales independently of the number of customers and the number of catalogue items, because the expensive item-to-item work is not done per request. The `covisit` retriever has the same spirit: the co-visitation matrix summarises 30 days of sessions, and serving only joins it with the user's ten seed items.
@@ -289,6 +337,8 @@ A candidate-stage bug is hard to see: recommendations stay plausible but come fr
 :::
 
 **How production systems do it.** Real marketplaces run many more retrievers in parallel, each with its own latency budget: embedding retrieval with an approximate nearest-neighbour index (Chapter 7), session-based retrieval, "same shop as items you ordered", "frequently bought with", campaign lists. The merge step applies per-source quotas and deduplicates by item; hard filters run against fast stores such as a key-value blocklist; and offline recall at the pool size is a daily monitored job.
+
+Two terms from that paragraph. A **quota** is a fixed number of slots reserved for each source, for example "at most 30 from `catpop`, at most 20 from `recent`", so one chatty source cannot take the entire pool. **Deduplicating by item** means that if three sources propose the same cat-food bag, the pool keeps one copy, not three, but remembers all three nominators (the attribution from earlier). An **approximate nearest-neighbour (ANN) index** is a data structure that finds "items similar to this one" quickly by accepting that it may occasionally miss the exact best match.
 
 ## Summary
 
