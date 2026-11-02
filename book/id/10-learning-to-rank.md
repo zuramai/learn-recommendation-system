@@ -15,7 +15,11 @@ Solusi sementara timnya adalah rumus tulisan tangan yang masih ada di repo sebag
 
 ## Intuisi: mengurutkan berdasarkan skor yang dipelajari seseorang
 
-Bayangkan seorang perekrut yang menyusun daftar pendek kandidat. Perekrut junior mengikuti daftar periksa yang bersifat aditif (heuristic blend kita); perekrut senior punya naluri non-aditif yang dipelajari dari ribuan perekrutan. Learning to rank mengekstrak penilaian itu dari hasil-hasil historis. Dua pertanyaan dapat dipelajari dari riwayat yang sama: "seberapa besar peluang kandidat ini diterima?" (sebuah probabilitas) dan "di antara dua orang ini, siapa yang didahulukan?" (sebuah urutan). Perekrut dengan lima slot wawancara hanya memerlukan yang kedua. Literatur ranking memiliki tiga keluarga:
+**Ranking** (pengurutan) berarti menaruh kumpulan item yang sama ke dalam *urutan* yang lebih baik. **Learning to rank** berarti urutan itu berasal dari model yang belajar dari hasil di masa lalu, bukan dari rumus tulisan tangan.
+
+Bayangkan dua asisten toko yang menata rak setinggi mata, tempat yang hanya muat sedikit item. Asisten baru mengikuti lembar poin: "jumlahkan tiga skor, taruh yang tertinggi di depan" (heuristic blend kita). Asisten berpengalaman sudah mengamati ribuan pembeli dan punya naluri tentang kombinasi, misalnya "ketel adalah taruhan buruk untuk orang yang baru kemarin membelinya". Learning to rank mengekstrak naluri itu dari hasil-hasil historis.
+
+Dua pertanyaan berbeda dapat dipelajari dari riwayat yang sama. Yang pertama: "seberapa besar peluang pembeli ini membeli item ini?" (sebuah probabilitas). Yang kedua: "di antara dua item ini, mana yang didahulukan?" (sebuah urutan). Rak dengan lima slot hanya memerlukan yang kedua. Literatur ranking memiliki tiga keluarga metode, tergantung pertanyaan mana yang dilatihkan pada model:
 
 | Keluarga | Model dilatih untuk… | Loss melihat | Contoh |
 |---|---|---|---|
@@ -24,6 +28,28 @@ Bayangkan seorang perekrut yang menyusun daftar pendek kandidat. Perekrut junior
 | **Listwise** | langsung memperbaiki metrik tingkat daftar seperti NDCG | seluruh daftar untuk satu pengguna | LambdaMART, `objective="lambdarank"` |
 
 Karena NDCG@20 (Bab 2) adalah metrik tingkat daftar yang mendiskon slot-slot bawah, metode listwise seharusnya menjadi pilihan yang alami. Praktiknya ternyata tidak serapi itu.
+
+Untuk melihat bedanya, ambil pembeli Sari dan tiga kandidat: sekantong makanan kucing yang ia pesan (label 3), mainan kucing yang hanya ia klik (label 1), dan casing ponsel yang ia abaikan (label 0).
+
+- Model **pointwise** melihat setiap baris sendirian dan mencoba menebak angkanya: "kantong: 3? mainan: 1? casing: 0?". Ia tidak pernah membandingkan item.
+- Model **pairwise** melihat pasangan dan bertanya "apakah kantong di atas mainan? mainan di atas casing? kantong di atas casing?". Tiga pasangan dari tiga item.
+- Model **listwise** melihat seluruh daftar sekaligus, menilai seberapa bagus keseluruhan urutan (dengan metrik seperti NDCG), lalu menyesuaikan diri untuk menaikkan nilai itu.
+
+Pointwise paling mudah dibuat. Listwise paling dekat dengan hal yang kita nilai. Pairwise berada di antaranya.
+
+### Kosakata: baris, fitur, label, grup query
+
+Empat kata ini sering muncul di bab ini.
+
+- **Baris** (*row*) adalah satu pasangan `(user, item)`, misalnya "Sari dan kantong makanan kucing".
+- **Fitur** (*feature*) adalah angka-angka yang menggambarkan sebuah baris, seperti "berapa lama Sari bertahan di halaman item ini" (Bab 9 membangun 46 di antaranya).
+- **Label** adalah jawaban yang benar untuk baris itu, diambil dari apa yang terjadi dalam tujuh hari berikutnya: 0 = tidak ada, 1 = klik, 2 = add-to-cart, 3 = order.
+- **Grup query** (*query group*, atau cukup *grup*) adalah semua baris milik satu pengguna. Ranking hanya masuk akal *di dalam* sebuah grup: tak ada yang bertanya apakah makanan kucing Sari harus mengalahkan casing ponsel Budi. Di bab ini setiap pengguna adalah satu grup, sehingga model hanya membandingkan item yang bersaing untuk halaman pengguna yang sama.
+
+Tanpa grup, model akan mencoba membandingkan baris dari pengguna yang berbeda, dan "pasangan" yang dipelajarinya tidak bermakna.
+
+### Alur keseluruhan
+
 
 Alur keseluruhan tahap ini di repo tampak seperti berikut.
 
@@ -48,17 +74,21 @@ Kita akan menyusun bagian-bagiannya secara berurutan: pertama *gradient boosting
 
 ### Langkah 1: regression tree dan satu split
 
-*Decision tree* mengubah satu baris fitur menjadi angka dengan mengajukan serangkaian pertanyaan ya/tidak. Pohon *regresi* menyimpan sebuah angka di setiap daun. Melatihnya berarti memilih, di setiap simpul, pertanyaan (fitur dan ambang) yang membuat baris-baris di tiap sisi sesama mirip sebisa mungkin. "Mirip" diukur dengan jumlah kuadrat galat (*sum of squared errors*, SSE) di sekitar rerata tiap sisi.
+*Decision tree* (pohon keputusan) adalah diagram alir berisi pertanyaan ya/tidak, seperti permainan dua puluh pertanyaan. Anda memasukkan satu baris nilai fitur di puncak, menjawab "apakah `ui_max_dwell_sec` paling banyak 45?", mengikuti cabang ya atau tidak, dan terus sampai tiba di **daun** (*leaf*, kotak ujung). Pohon *regresi* menyimpan sebuah angka di setiap daun, dan angka itu menjadi prediksi bagi setiap baris yang mendarat di sana.
+
+Melatih pohon berarti memilih, di setiap titik percabangan (**simpul**, *node*), pertanyaan (fitur mana, ambang berapa) yang memilah baris menjadi dua kelompok yang masing-masing sebisa mungkin *mirip*. "Mirip" diukur dengan **jumlah kuadrat galat (SSE, *sum of squared errors*)**: ambil nilai tiap baris, ukur seberapa jauh dari rerata kelompoknya, kuadratkan jarak itu (agar terlalu tinggi dan terlalu rendah sama-sama dihitung buruk), lalu jumlahkan semuanya. SSE bernilai 0 berarti semua baris dalam kelompok identik.
 
 Ambil set pelatihan mainan berisi enam baris kandidat untuk satu fitur, `ui_max_dwell_sec` (waktu terlama pengguna bertahan di halaman item ini), beserta label bertingkatnya.
 
-(detik dwell, label) = (0, 0), (0, 0), (5, 0), (30, 1), (60, 2), (90, 3), satu baris masing-masing, bernomor 1 sampai 6.
+(detik dwell, label) = (0, 0), (0, 0), (5, 0), (30, 1), (60, 2), (90, 3), satu baris masing-masing, bernomor 1 sampai 6. Bacalah sebagai "semakin lama pembeli bertahan, semakin kuat aksi yang kemudian ia lakukan".
 
-Boosting dimulai dari prediksi konstan, yaitu rerata label: $F_0 = (0+0+0+1+2+3)/6 = 1.0$. **Residual** setiap baris adalah sisa yang belum terjelaskan, $r_i = y_i - F_0$, yang menghasilkan $-1, -1, -1, 0, 1, 2$. Jumlah kuadratnya adalah $1+1+1+0+1+4 = 8$.
+Boosting dimulai dari tebakan paling membosankan: konstanta yang sama untuk setiap baris, yaitu rerata label, $F_0 = (0+0+0+1+2+3)/6 = 1.0$. (Tanpa informasi, rerata adalah tebakan paling aman.) **Residual** setiap baris adalah *apa yang masih salah*: label dikurangi prediksi saat ini, $r_i = y_i - F_0$. Untuk keenam baris kita hasilnya $-1, -1, -1, 0, 1, 2$. Tiga baris pertama diprediksi terlalu tinggi, dua terakhir terlalu rendah. Jumlah kuadratnya adalah $1+1+1+0+1+4 = 8$, "ketidakrapian" awal kita.
 
-Sekarang kita coba kandidat split pada waktu dwell dan menilai masing-masing dari seberapa besar SSE yang dihilangkan. Untuk split menjadi himpunan kiri $L$ dan kanan $R$ dengan residual $r$,
+Sekarang kita coba kandidat **split** (satu split adalah satu pertanyaan ya/tidak, di sini "apakah dwell paling banyak angka ini?") dan menilai masing-masing dari seberapa besar SSE yang dihilangkan. Untuk split menjadi himpunan kiri $L$ dan kanan $R$ dengan residual $r$,
 
 $$\text{SSE}(S) = \sum_{i\in S}\bigl(r_i - \bar r_S\bigr)^2, \qquad \text{gain} = \text{SSE}(\text{all}) - \text{SSE}(L) - \text{SSE}(R).$$
+
+Dengan kata lain: $S$ adalah kelompok baris mana pun, $\bar r_S$ adalah rerata residual kelompok itu, dan SSE menjumlahkan jarak kuadrat dari rerata tersebut. **Gain** adalah seberapa banyak ketidakrapian yang dihilangkan split: SSE sebelum split dikurangi SSE kedua sisi sesudahnya. Telusuri split pemenang di tabel di bawah, `dwell ≤ 45`. Sisi kiri berisi baris 1–4 dengan residual $-1, -1, -1, 0$. Reratanya $-0.75$, sehingga SSE(L) $= 3\times(0.25)^2 + (0.75)^2 = 0.75$. Sisi kanan berisi baris 5 dan 6 dengan residual $1, 2$, rerata $1.5$, SSE(R) $= 0.25+0.25 = 0.5$. Gain-nya $8 - 0.75 - 0.5 = 6.75$.
 
 | split | baris kiri | baris kanan | SSE(L) | SSE(R) | gain |
 |---|---|---|---|---|---|
@@ -67,21 +97,28 @@ $$\text{SSE}(S) = \sum_{i\in S}\bigl(r_i - \bar r_S\bigr)^2, \qquad \text{gain} 
 | **dwell ≤ 45** | 1–4 | 5, 6 | 0.75 | 0.5 | **6.75** |
 | dwell ≤ 75 | 1–5 | 6 | 3.2 | 0 | 4.8 |
 
-Split pemenangnya adalah `dwell ≤ 45`. Nilai daun adalah rerata residual di tiap sisi: $-0.75$ di kiri, $+1.5$ di kanan. Pohon seperti ini adalah "weak learner": satu pertanyaan, dua angka, dan jelas keliru untuk baris 4 dan 5 secara individual. Itu tidak masalah. Boosting tidak memerlukan satu pohon yang hebat; ia memerlukan ratusan pohon biasa-biasa saja yang masing-masing memperbaiki sebagian galat sebelumnya.
+Split pemenangnya adalah `dwell ≤ 45`. Nilai daun adalah rerata residual di tiap sisi: $-0.75$ di kiri, $+1.5$ di kanan. Pohon seperti ini adalah **weak learner** (pembelajar lemah): satu pertanyaan, dua angka, dan jelas keliru untuk baris 4 dan 5 secara individual. Itu tidak masalah. Boosting tidak memerlukan satu pohon yang hebat; ia memerlukan ratusan pohon biasa-biasa saja yang masing-masing memperbaiki sebagian galat sebelumnya, seperti sekelompok orang yang masing-masing membetulkan satu kesalahan kecil pada draf yang mereka terima.
 
-Kolom *gain* juga menjadi asal **feature importance** nanti: setiap kali sebuah fitur dipilih untuk split, gain split itu dikreditkan kepadanya. Menjumlahkan kredit itu atas semua split dari semua pohon lalu membaginya dengan total menghasilkan "porsi dari total gain" yang akan Anda lihat pada hasil.
+Kolom *gain* juga menjadi asal **feature importance** (tingkat kepentingan fitur) nanti. Ia menjawab "fitur mana yang paling banyak diandalkan pohon?". Setiap kali sebuah fitur dipilih untuk split, gain split itu dikreditkan kepadanya. Menjumlahkan kredit itu atas semua split dari semua pohon lalu membaginya dengan total menghasilkan "porsi dari total gain" yang akan Anda lihat pada hasil.
 
 ### Langkah 2: boosting = pencocokan residual berulang
 
-Aturan pembaruannya sederhana. Dengan laju pembelajaran (*learning rate*) $\eta$ (LightGBM menyebutnya `learning_rate`), prediksi setiap baris digeser sebagian jarak menuju nilai daun pohonnya:
+Setiap pohon baru tidak dipercaya sepenuhnya. Sebagai gantinya, kita menggeser setiap prediksi hanya *sebagian* jarak menuju apa yang dikatakan pohon. Pecahan itu adalah **laju pembelajaran** (*learning rate*), ditulis $\eta$ (LightGBM menyebutnya `learning_rate`). Cara kerjanya seperti memutar keran shower: putaran besar kebablasan, putaran kecil memberi kesempatan memeriksa dan mengoreksi. Dalam simbol, $F_m(x)$ adalah prediksi model setelah $m$ pohon, $h_m(x)$ adalah angka yang dikeluarkan pohon ke-$m$ untuk baris $x$, dan
 
 $$F_m(x) = F_{m-1}(x) + \eta\, h_m(x).$$
 
-Ambil $\eta = 0.5$ untuk contoh satu ronde. Baris 1–4 jatuh ke kiri dan bergeser sebesar $0.5 \times (-0.75) = -0.375$, dari $1.0$ menjadi $0.625$. Baris 5 dan 6 bergeser sebesar $0.5 \times 1.5 = +0.75$, menjadi $1.75$. Residual barunya adalah:
+Ambil $\eta = 0.5$ untuk contoh satu ronde. Baris 1–4 jatuh ke kiri dan bergeser sebesar $0.5 \times (-0.75) = -0.375$, dari $1.0$ menjadi $0.625$. Baris 5 dan 6 bergeser sebesar $0.5 \times 1.5 = +0.75$, menjadi $1.75$. Residual barunya (label dikurangi prediksi baru) adalah:
 
-Baris 1-3 kini punya residual -0.625, baris 4 punya +0.375, baris 5 punya +0.25 dan baris 6 punya +1.25. Total galat kuadrat turun dari 8 menjadi $3\times 0.3906 + 0.1406 + 0.0625 + 1.5625 \approx 2.94$. Pohon berikutnya dilatih pada residual baru ini, dan seterusnya. Setelah 300 ronde dengan $\eta$ kecil, model telah mengambil 300 langkah koreksi kecil.
+| Baris | Label | Prediksi baru | Residual baru |
+|---|---|---|---|
+| 1–3 | 0 | 0.625 | −0.625 |
+| 4 | 1 | 0.625 | +0.375 |
+| 5 | 2 | 1.75 | +0.25 |
+| 6 | 3 | 1.75 | +1.25 |
 
-Lalu mengapa disebut "gradient" boosting? Untuk galat kuadrat, residual $y - F$ persis sama dengan gradien negatif dari $\tfrac12 (y-F)^2$ terhadap prediksi $F$. Wawasan Friedman adalah bahwa Anda dapat memasukkan loss *apa pun* yang dapat diturunkan, lalu mencocokkan setiap pohon baru dengan gradien negatif loss itu. Ganti galat kuadrat dengan log-loss dan Anda mendapat pengklasifikasi; ganti dengan loss ranking dan Anda mendapat ranker.
+Total galat kuadrat turun dari 8 menjadi $3\times 0.3906 + 0.1406 + 0.0625 + 1.5625 \approx 2.94$. Pohon berikutnya dilatih pada residual baru ini, dan seterusnya. Setelah 300 ronde dengan $\eta$ kecil, model telah mengambil 300 langkah koreksi kecil, dan prediksi akhirnya adalah tebakan awal ditambah jumlah semua langkah kecil itu.
+
+Lalu mengapa disebut "gradient" boosting? **Loss** adalah angka yang menyatakan seberapa buruk prediksi saat ini (makin kecil makin baik); galat kuadrat adalah salah satu loss. **Gradien** loss memberi tahu, untuk setiap prediksi, ke arah mana ia harus digeser dan seberapa kuat agar loss menyusut paling cepat. Untuk galat kuadrat, residual $y - F$ persis sama dengan geseran itu: ia adalah gradien negatif dari $\tfrac12 (y-F)^2$ terhadap prediksi $F$. Wawasan Friedman adalah bahwa Anda dapat memasukkan loss *apa pun* yang mulus (dapat diturunkan), lalu mencocokkan setiap pohon baru dengan gradien negatif loss itu. Ganti galat kuadrat dengan log-loss (loss untuk label ya/tidak) dan Anda mendapat pengklasifikasi; ganti dengan loss ranking dan Anda mendapat ranker.
 
 ::: fact
 **Boosting adalah gradient descent dalam ruang fungsi.** Makalah Jerome Friedman tahun 2001, "Greedy function approximation: A gradient boosting machine", membingkai boosting sebagai gradient descent bertahap pada loss apa pun yang dapat diturunkan, dengan setiap pohon baru dicocokkan ke gradien negatif loss pada prediksi saat ini. Satu gagasan itulah yang membuat pustaka yang sama dapat melatih regressor, classifier, dan ranker hanya dengan mengganti objektifnya.
@@ -91,31 +128,33 @@ Sumber: Friedman, Annals of Statistics, 2001
 
 ### Langkah 3: dari galat per baris ke kualitas per daftar
 
-Objektif pointwise (misalnya log-loss pada "apakah baris ini diklik atau lebih?") memperlakukan setiap baris sebagai contoh yang independen. Ia dengan senang hati menghabiskan kapasitas model untuk menebak probabilitas item ke-95 dengan tepat. Padahal halaman Dina hanya menampilkan 20 posisi teratas, dan NDCG mendiskon posisi-posisi akhirnya dengan kuat.
+Objektif pointwise (misalnya log-loss pada "apakah baris ini diklik atau lebih?") memperlakukan setiap baris sebagai contoh yang independen. Ia dengan senang hati menghabiskan kapasitas model untuk menebak probabilitas item ke-95 dengan tepat. Padahal halaman Dina hanya menampilkan 20 posisi teratas, dan NDCG mendiskon posisi-posisi akhirnya dengan kuat. Kita ingin model mencurahkan tenaganya di tempat metrik peduli.
 
-Ingat dari Bab 2, dengan relevansi bertingkat $rel_i$ pada posisi $i$:
+Ingat NDCG (*normalised discounted cumulative gain*) dari Bab 2. Ia menilai daftar berperingkat dari 0 sampai 1: item dengan label kuat memberi banyak poin, item yang ditaruh lebih bawah memberi lebih sedikit, dan hasilnya dibandingkan dengan urutan terbaik yang mungkin. Dengan relevansi bertingkat $rel_i$ pada posisi $i$:
 
 $$\text{DCG@}K = \sum_{i=1}^{K} \frac{2^{rel_i}-1}{\log_2(i+1)}, \qquad \text{NDCG@}K = \frac{\text{DCG@}K}{\text{IDCG@}K},$$
 
-dengan IDCG adalah DCG dari urutan yang sempurna. Pembilang $2^{rel}-1$ adalah **gain**: relevansi 0, 1, 2, 3 menghasilkan gain 0, 1, 3, 7. Satu order bernilai tujuh klik. Penyebutnya adalah **discount**: posisi 1 berbobot $1$, posisi 2 berbobot $0.631$, posisi 3 berbobot $0.5$, dan seterusnya.
+dengan IDCG (*ideal DCG*) adalah DCG dari urutan yang sempurna. Pembilang $2^{rel}-1$ adalah **gain**, ganjaran karena item itu ada dalam daftar: relevansi 0, 1, 2, 3 menghasilkan gain 0, 1, 3, 7. Satu order bernilai tujuh klik. Penyebutnya adalah **discount**, seberapa berharga sebuah slot karena posisinya: posisi 1 berbobot $1$, posisi 2 berbobot $0.631$, posisi 3 berbobot $0.5$, dan seterusnya. Slot teratas paling berharga, seperti pada rak mana pun.
 
-NDCG bergantung pada *urutan terurut*, yang tidak dapat diturunkan, sehingga kita tidak bisa mengambil gradiennya. Trik LambdaRank (Burges, 2010) bersifat pragmatis: *lewati loss, definisikan gradiennya secara langsung*.
+NDCG bergantung pada *urutan terurut*, dan pengurutan tidak dapat diturunkan: menggeser skor sedikit saja entah tidak mengubah apa-apa, atau tiba-tiba menukar dua item, sehingga tidak ada lereng mulus untuk dituruni. Karena itu kita tidak bisa mengambil gradiennya. Trik LambdaRank (Burges, 2010) bersifat pragmatis: *lewati loss, definisikan gradiennya secara langsung*.
 
 ### Langkah 4: lambda dan pertukaran NDCG
 
-Mulailah dengan loss pairwise, seperti pada RankNet. Untuk dua item $i$ dan $j$ dari pengguna yang sama, dengan $i$ lebih relevan, skor model saat ini adalah $s_i$ dan $s_j$. Probabilitas yang diberikan model untuk "$i$ berada di atas $j$" adalah fungsi logistik dari selisih skor, dan loss pairwise mendorong $s_i - s_j$ membesar. Gradiennya terhadap $s_i$ adalah
+Kita mulai dengan **loss pairwise**, seperti pada RankNet. Ambil dua item $i$ dan $j$ dari pengguna yang sama, dengan $i$ yang lebih relevan. Skor model saat ini adalah $s_i$ dan $s_j$; idealnya $s_i$ jelas lebih besar. **Fungsi logistik** mengubah selisih skor menjadi probabilitas antara 0 dan 1 ("seberapa yakin model bahwa $i$ berada di atas $j$?"): mendekati 0.5 ketika skor sama, mendekati 1 ketika $s_i$ jauh di atas. Loss pairwise mendorong $s_i - s_j$ membesar. Dorongan pada $i$ disebut **lambda** ($\lambda$): tandanya menyatakan naik atau turun, besarnya menyatakan seberapa kuat. Untuk sebuah pasangan, nilainya
 
 $$\lambda_{ij} = \frac{-\sigma}{1 + e^{\sigma (s_i - s_j)}}.$$
 
-Ketika $i$ sudah jauh di atas $j$, penyebutnya sangat besar dan dorongannya lenyap. Ketika $i$ keliru berada di bawah $j$, $s_i - s_j$ negatif, penyebutnya mendekati 1, dan dorongannya mendekati maksimum $\sigma$. Sejauh ini ini hanyalah logika pairwise biasa: semua pasangan yang salah urutan sama mendesaknya.
+Di sini $\sigma$ (sigma) hanyalah konstanta yang mengatur seberapa curam kurva logistik; $e$ adalah konstanta eksponensial biasa. Dengan kata lain: dorongan kuat bila pasangan berada dalam urutan yang salah, dan memudar hingga nol bila pasangan sudah terpisah dengan baik.
 
-Langkah LambdaRank adalah **mengalikannya dengan perubahan NDCG yang akan terjadi bila kedua item ditukar**:
+Ketika $i$ sudah jauh di atas $j$, penyebutnya sangat besar dan dorongannya lenyap. Ketika $i$ keliru berada di bawah $j$, $s_i - s_j$ negatif, penyebutnya mendekati 1, dan dorongannya mendekati maksimum $\sigma$. Sejauh ini ini hanyalah logika pairwise biasa: semua pasangan yang salah urutan sama mendesaknya, entah di puncak halaman atau di halaman sembilan.
+
+Langkah LambdaRank adalah **mengalikannya dengan perubahan NDCG yang akan terjadi bila kedua item ditukar**. Secara intuitif: "seberapa peduli metrik jika pasangan ini diperbaiki?":
 
 $$\lambda_{ij} = \frac{-\sigma}{1 + e^{\sigma (s_i - s_j)}}\; \bigl|\Delta \text{NDCG}_{ij}\bigr|.$$
 
-Menukar item pada posisi $p_i$ dan $p_j$ mengubah DCG sebesar $(g_i - g_j)\,(d_{p_i} - d_{p_j})$ dalam nilai mutlak, dengan $g$ adalah gain dan $d_p = 1/\log_2(p+1)$ adalah discount. Membaginya dengan IDCG menghasilkan $|\Delta\text{NDCG}|$. Pasangan yang salah urutan *dan* berada di puncak daftar dengan selisih gain besar mendapat lambda besar. Pasangan yang salah urutan di posisi 80 dan 81, atau yang gain-nya sama, nyaris tidak mendapat apa-apa. Begitulah algoritma "memperhatikan" puncak daftar tanpa pernah menurunkan NDCG.
+Menukar item pada posisi $p_i$ dan $p_j$ mengubah DCG sebesar $(g_i - g_j)\,(d_{p_i} - d_{p_j})$ dalam nilai mutlak, dengan $g$ adalah gain dan $d_p = 1/\log_2(p+1)$ adalah discount. Membaginya dengan IDCG menghasilkan $|\Delta\text{NDCG}|$ (tanda garis tegak berarti "abaikan tandanya"; $\Delta$ berarti "perubahan pada"). Pasangan yang salah urutan *dan* berada di puncak daftar dengan selisih gain besar mendapat lambda besar. Pasangan yang salah urutan di posisi 80 dan 81, atau yang gain-nya sama, nyaris tidak mendapat apa-apa. Begitulah algoritma "memperhatikan" puncak daftar tanpa pernah menurunkan NDCG.
 
-Lambda setiap baris dijumlahkan atas semua pasangannya, bertanda positif untuk anggota yang lebih relevan dan negatif untuk yang kurang relevan. Lambda ini menggantikan gradien negatif ketika mencocokkan pohon berikutnya: itulah **LambdaMART** (**MART**, *multiple additive regression trees*, adalah nama lama untuk gradient-boosted tree).
+Lambda setiap baris dijumlahkan atas semua pasangannya, bertanda positif untuk anggota yang lebih relevan dan negatif untuk yang kurang relevan. Lambda ini menggantikan gradien negatif (residual pada contoh mainan kita) ketika mencocokkan pohon berikutnya: itulah **LambdaMART** (**MART**, *multiple additive regression trees*, adalah nama lama untuk gradient-boosted tree). Jadi LambdaMART hanyalah gradient boosting yang mengukur "apa yang masih salah" dengan lambda, bukan residual.
 
 ### Contoh hitung delta pertukaran
 
@@ -127,6 +166,8 @@ Ambil tiga kandidat untuk satu pengguna, saat ini berurutan $A, B, C$ dengan lab
 
 Menukar $A$ dan $B$ (posisi 1, 2) mengubah NDCG sebesar $7\times(1-0.631)/7.631 = 0.339$; menukar $A$ dan $C$ (posisi 1, 3) hanya sebesar $1\times 0.5/7.631 = 0.066$. Kesalahan pertama, item yang tak pernah diklik berada di atas item tingkat order, lima kali lebih penting. Sekarang anggaplah skor mentah model adalah $s_A = 2.0$ dan $s_B = 1.0$ dengan $\sigma = 1$. Untuk pasangan "$B$ seharusnya di atas $A$", $s_B - s_A = -1$, sehingga faktor logistiknya $1/(1+e^{-1}) = 0.731$. Besar lambda untuk pasangan itu adalah $0.731 \times 0.339 = 0.248$: dorongan ke atas yang tegas pada $B$ dan dorongan ke bawah yang sama besar pada $A$. Untuk pasangan $(C, A)$ dengan faktor logistik yang sama, besarnya hanya $0.731\times 0.066=0.048$. Karena itu pohon berikutnya akan mencurahkan sebagian besar upaya split-nya pada fitur yang membedakan $B$ dari $A$.
 
+Secara sederhana: model saat ini menaruh $A$ yang tak pernah diklik di urutan pertama dan item yang dipesan, $B$, di urutan kedua. Memperbaiki pasangan itu akan menaikkan NDCG sebesar 0.339, sehingga $B$ mendapat dorongan kuat ke atas dan $A$ dorongan kuat ke bawah. Memperbaiki pasangan $A$/$C$ hanya menambah 0.066, jadi ia mendapat dorongan lembut. Kesalahan yang lebih penting bagi metrik mendapat instruksi yang lebih keras.
+
 ::: fact
 **LambdaMART memenangi Yahoo! Learning to Rank Challenge.** Sistem yang memenangi Track 1 dari Yahoo! Learning to Rank Challenge (2010) adalah ensemble model gradien-lambda, yang dibangun di atas boosted tree yang dilatih dengan gradien ala LambdaRank. Makalah tinjauan Chris Burges sebelumnya, "From RankNet to LambdaRank to LambdaMART", adalah rujukan standar tentang bagaimana ketiga algoritma itu saling terkait.
 
@@ -135,33 +176,33 @@ Sumber: Burges et al., Proceedings of the Learning to Rank Challenge (PMLR), 201
 
 ### Langkah 5: label bertingkat
 
-Di repo ini label bukan sekadar 0 atau 1. `schema.LABEL_GAIN` menyatakan bahwa klik bernilai 1, add-to-cart bernilai 2, dan order bernilai 3. Jika pengguna melakukan beberapa hal pada item yang sama dalam jendela label, `data.labels` menyimpan yang *terkuat*. Ini penting dalam dua hal:
+Di repo ini label bukan sekadar 0 atau 1. `schema.LABEL_GAIN` menyatakan bahwa klik bernilai 1, add-to-cart bernilai 2, dan order bernilai 3. Jika pengguna melakukan beberapa hal pada item yang sama dalam jendela label, `data.labels` menyimpan yang *terkuat*: orang yang mengklik lalu memesan dihitung sebagai order. Ini penting dalam dua hal:
 
 1. Model diberi imbalan karena menaruh item yang dipesan pengguna di atas item yang hanya diklik.
-2. Parameter `label_gain=[0, 1, 3, 7]` di LightGBM mengubah label bilangan bulat menjadi gain $2^{rel}-1$ yang dipakai dalam NDCG. Tabel bawaan LightGBM kebetulan sama, yaitu $2^{rel}-1$ untuk label-label ini, tetapi menuliskannya secara eksplisit di `PARAMS` menjaga agar objektif dan evaluator offline tidak diam-diam menyimpang; artinya objektif yang dioptimalkan dan metrik yang dilaporkan adalah fungsi yang sama.
+2. Parameter `label_gain=[0, 1, 3, 7]` di LightGBM mengubah label bilangan bulat menjadi gain $2^{rel}-1$ yang dipakai dalam NDCG (label 0 memberi 0, label 1 memberi 1, label 2 memberi 3, label 3 memberi 7). Tabel bawaan LightGBM kebetulan sama, yaitu $2^{rel}-1$ untuk label-label ini, tetapi menuliskannya secara eksplisit di `PARAMS` menjaga agar objektif dan evaluator offline tidak diam-diam menyimpang; artinya objektif yang dioptimalkan dan metrik yang dilaporkan adalah fungsi yang sama.
 
-Pengguna tanpa positif dalam jendela tidak membawa informasi urutan (semua $|\Delta\text{NDCG}|$ mereka bernilai 0), sehingga `ranker.train` membuangnya.
+Pengguna tanpa positif dalam jendela tidak membawa informasi urutan: setiap item berlabel 0, sehingga menukar dua item mana pun tidak mengubah apa-apa (semua $|\Delta\text{NDCG}|$ mereka bernilai 0). `ranker.train` membuangnya.
 
 ## Penjelasan kode
 
 ### Ranker itu sendiri
 
-Seluruh konfigurasi LambdaMART berada di kamus `PARAMS` di bagian atas `recommender/recsys/ranker.py` (ditambah konstanta `NUM_ROUNDS`):
+Seluruh konfigurasi LambdaMART berada di kamus `PARAMS` di bagian atas `recommender/recsys/ranker.py` (ditambah konstanta `NUM_ROUNDS`). **Hyperparameter** adalah pengaturan yang Anda pilih sebelum pelatihan, bukan sesuatu yang dipelajari model. Tabel berikut memberi arti sederhana tiap parameter:
 
-| Parameter | Nilai | Peran |
+| Parameter | Nilai | Arti sederhana |
 |---|---|---|
-| `objective` | `lambdarank` | gradien lambda (Langkah 4) |
-| `learning_rate` | 0.05 | ukuran langkah $\eta$ |
-| `num_leaves` | 31 | batas ukuran pohon |
-| `min_data_in_leaf` | 50 | jumlah baris minimum per daun |
-| `bagging_fraction` / `bagging_freq` | 0.8 / 1 | sampel baris 80% yang baru untuk tiap pohon |
-| `feature_fraction` | 0.8 | sampel kolom 80% per pohon |
-| `label_gain` | `[0, 1, 3, 7]` | gain untuk label 0..3 |
-| `lambdarank_truncation_level` | 20 | fokus pada 20 teratas |
+| `objective` | `lambdarank` | pakai gradien lambda (Langkah 4) |
+| `learning_rate` | 0.05 | ukuran langkah $\eta$: tiap pohon menggeser prediksi hanya 5% dari jaraknya |
+| `num_leaves` | 31 | tiap pohon paling banyak punya 31 kotak ujung (daun), sehingga tetap kecil |
+| `min_data_in_leaf` | 50 | sebuah daun harus memuat minimal 50 baris, sehingga tidak menghafal satu pembeli |
+| `bagging_fraction` / `bagging_freq` | 0.8 / 1 | tiap pohon melihat 80% baris acak yang baru |
+| `feature_fraction` | 0.8 | tiap pohon melihat 80% kolom (fitur) acak |
+| `label_gain` | `[0, 1, 3, 7]` | ganjaran untuk label 0, 1, 2, 3 |
+| `lambdarank_truncation_level` | 20 | hanya pasangan yang melibatkan 20 posisi teratas yang penting |
 | `NUM_ROUNDS` | 300 | jumlah pohon |
 
 
-Langkah kecil dengan banyak ronde menggeneralisasi lebih baik daripada sedikit langkah besar. LightGBM menumbuhkan pohon secara *leaf-wise*, sehingga `num_leaves` (bukan kedalaman) yang mengendalikan kompleksitas, dan `min_data_in_leaf` mencegah sebuah daun menghafal satu pengguna. Bagging dan pengambilan sampel fitur menyuntikkan keacakan, itulah sebabnya `seed` mengubah hasil (lihat ablasi). Pemotongan pada 20 sesuai dengan `K = 20`: pasangan yang jauh di dalam daftar memiliki $|\Delta\text{NDCG}|$ yang dapat diabaikan.
+Langkah kecil dengan banyak ronde menggeneralisasi lebih baik daripada sedikit langkah besar (model punya lebih banyak kesempatan mengoreksi diri tanpa bereaksi berlebihan pada satu pohon). LightGBM menumbuhkan pohon secara **leaf-wise**, selalu memecah daun yang akan memberi gain terbesar, sehingga `num_leaves` (bukan kedalaman) yang mengendalikan kompleksitas, dan `min_data_in_leaf` mencegah sebuah daun menghafal satu pengguna. **Bagging** (melatih tiap pohon pada sampel baris acak) dan pengambilan sampel fitur menyuntikkan keacakan agar pohon-pohon tidak saling meniru; itulah juga sebabnya **seed**, angka awal pembangkit bilangan acak, mengubah hasil (lihat ablasi). Pemotongan pada 20 sesuai dengan `K = 20`: pasangan yang jauh di dalam daftar memiliki $|\Delta\text{NDCG}|$ yang dapat diabaikan.
 
 ::: fact
 **LightGBM cepat karena mengerjakan lebih sedikit per split.** Makalah LightGBM memperkenalkan Gradient-based One-Side Sampling, yang melewati sebagian besar baris bergradien kecil saat memperkirakan gain split, dan Exclusive Feature Bundling, yang menggabungkan fitur jarang yang hampir tidak pernah bernilai bukan-nol secara bersamaan. Pada dataset publik yang diuji penulisnya, ini mempercepat pelatihan gradient-boosted tree konvensional hingga lebih dari 20 kali dengan akurasi yang nyaris sama.
@@ -176,7 +217,7 @@ path: recommender/recsys/ranker.py
 symbol: train
 ```
 
-Ada tiga hal yang perlu diperhatikan. Pertama, mask `has_pos` hanya menyimpan pengguna yang punya setidaknya satu positif dalam jendela label; sisanya dibuang. Kedua, `sort_values("user_id", kind="stable")` menempatkan baris-baris tiap pengguna berdampingan, karena argumen `group=` milik LightGBM adalah daftar *ukuran grup yang berurutan*, bukan id pengguna. Jika baris tidak berdampingan, batas grup akan diam-diam memotong pengguna yang salah dan model akan berlatih pada data sampah tanpa memunculkan galat apa pun. Ketiga, seed dapat disuntikkan: `train(frame, names, seed)` inilah yang memungkinkan ablasi melatih ulang model yang sama dengan seed acak berbeda.
+Ada tiga hal yang perlu diperhatikan. Pertama, mask `has_pos` hanya menyimpan pengguna yang punya setidaknya satu positif dalam jendela label; sisanya dibuang. Kedua, `sort_values("user_id", kind="stable")` menempatkan baris-baris tiap pengguna berdampingan, karena argumen `group=` milik LightGBM adalah daftar *ukuran grup yang berurutan*, bukan id pengguna. Contoh: bila frame terurut berisi 3 baris pengguna A diikuti 2 baris pengguna B, daftar grupnya `[3, 2]`, dan LightGBM membacanya "3 baris pertama adalah satu pengguna, 2 baris berikutnya pengguna lain". Jika baris tidak berdampingan, batas grup akan diam-diam memotong pengguna yang salah dan model akan berlatih pada data sampah tanpa memunculkan galat apa pun. Ketiga, seed dapat disuntikkan: `train(frame, names, seed)` inilah yang memungkinkan ablasi melatih ulang model yang sama dengan seed acak berbeda.
 
 ### Melatih dan mengevaluasi dari ujung ke ujung
 
@@ -195,16 +236,18 @@ Service, di `recommender/recsys/service.py`, memanggil mesin `retrain` yang sama
 
 ### Menjelaskan skor dengan SHAP
 
-Model boosted adalah jumlah dari 300 pohon. Satu prediksi melewati semuanya, sehingga membaca pohon secara langsung tidak ada harapan. Nilai **SHAP** (Lundberg dan Lee, 2017) mengatasi ini dengan gagasan dari teori permainan kooperatif: perlakukan fitur sebagai pemain dalam permainan yang hadiahnya adalah skor model. Nilai Shapley sebuah fitur adalah rerata kontribusi marginalnya atas semua urutan kemungkinan penambahan fitur. Untuk satu baris, kontribusi semua fitur ditambah skor dasar (*base score*) berjumlah *persis* sama dengan keluaran mentah model.
+Model boosted adalah jumlah dari 300 pohon. Satu prediksi melewati semuanya, sehingga membaca pohon secara langsung tidak ada harapan. Kita menginginkan sesuatu seperti **struk belanja**: daftar baris yang masing-masing menyatakan "fitur ini menambah sekian, fitur itu mengurangi sekian", yang berjumlah persis sama dengan total akhir. Nilai **SHAP** (Lundberg dan Lee, 2017) memberi kita struk itu. Totalnya adalah skor model, jumlah awalnya adalah **skor dasar** (*base score*, yang akan didapat baris yang biasa-biasa saja), dan setiap baris struk adalah **kontribusi** satu fitur.
 
-Menghitung nilai Shapley secara naif memerlukan himpunan bagian fitur dalam jumlah eksponensial. Untuk ensemble pohon ada algoritma eksak yang cepat, dan LightGBM mengimplementasikannya di balik satu flag, `pred_contrib=True`. Repo membungkusnya:
+Bagaimana menentukan ukuran yang adil untuk tiap baris? SHAP meminjam **nilai Shapley** dari teori permainan kooperatif: bayangkan fitur-fitur bergabung ke dalam prediksi satu per satu, lalu ukur seberapa jauh skor bergerak ketika masing-masing bergabung. Urutan bergabung berpengaruh (fitur bisa saling tumpang tindih), jadi kita merata-ratakan atas semua urutan yang mungkin. Contoh kecil ilustratif dengan dua fitur, mulai dari dasar 0. Mengetahui waktu dwell saja menggeser skor ke $+1.0$; mengetahui "barang habis pakai" saja menggesernya ke $+0.4$; mengetahui keduanya menghasilkan $+1.6$. Jika dwell bergabung lebih dulu, ia menambah $1.0$; jika bergabung kedua, ia menambah $1.6 - 0.4 = 1.2$. Reratanya $1.1$. Untuk "barang habis pakai": $0.4$ bila pertama, $1.6 - 1.0 = 0.6$ bila kedua, rerata $0.5$. Kontribusi $1.1 + 0.5 = 1.6$ berjumlah *persis* sama dengan skornya. Untuk satu baris, kontribusi semua fitur ditambah skor dasar selalu berjumlah persis sama dengan keluaran mentah model.
+
+Menghitung nilai Shapley secara naif memerlukan percobaan himpunan bagian fitur dalam jumlah eksponensial (dengan 46 fitur, jauh terlalu banyak). Untuk ensemble pohon ada algoritma eksak yang cepat, dan LightGBM mengimplementasikannya di balik satu flag, `pred_contrib=True`. Repo membungkusnya:
 
 ```include
 path: recommender/recsys/ranker.py
 symbol: contributions
 ```
 
-`model.predict(x, pred_contrib=True)` mengembalikan matriks dengan satu kolom per fitur ditambah satu kolom terakhir yang memuat **bias**, yaitu keluaran rerata model ketika ia tidak tahu apa-apa tentang baris tersebut. Irisan `[:, :-1]` membuang kolom terakhir itu, sehingga yang tersisa adalah kontribusi murni per fitur. Untuk setiap baris kita lalu mengurutkan fitur berdasarkan $|\text{contribution}|$ dan menyimpan `top` teratas sebagai triplet `(name, value, contribution)`. Service gRPC memanggil ini di `recommend_rpc` dan menaruh lima teratas di setiap respons; API Rust meneruskannya tanpa diubah, dan `WhyThis.vue` menggambarkannya sebagai batang.
+`model.predict(x, pred_contrib=True)` mengembalikan matriks dengan satu baris per kandidat dan satu kolom per fitur, ditambah satu kolom terakhir yang memuat **bias**, yaitu keluaran rerata model ketika ia tidak tahu apa-apa tentang baris tersebut ("jumlah awal" pada struk). Irisan `[:, :-1]` berarti "semua baris, semua kolom kecuali yang terakhir", sehingga kolom bias terbuang dan yang tersisa adalah kontribusi murni per fitur. Untuk setiap baris kita lalu mengurutkan fitur berdasarkan $|\text{contribution}|$ (dorongan terbesar lebih dulu, naik maupun turun) dan menyimpan `top` teratas sebagai triplet `(name, value, contribution)`. Service gRPC (server internal repo yang dipanggil program lain) memanggil ini di `recommend_rpc` dan menaruh lima teratas di setiap respons; API Rust meneruskannya tanpa diubah, dan `WhyThis.vue` menggambarkannya sebagai batang.
 
 ::: fact
 **SHAP eksak untuk pohon berjalan dalam waktu polinomial.** Makalah TreeExplainer menyajikan algoritma waktu polinomial pertama untuk menghitung penjelasan optimal berbasis teori permainan bagi model berbasis pohon seperti random forest dan gradient-boosted tree. Sebelumnya, nilai Shapley eksak memerlukan pencacahan himpunan bagian fitur yang jumlahnya eksponensial, sehingga tidak praktis untuk model dengan puluhan fitur dan ratusan pohon.
@@ -220,27 +263,27 @@ Skrip pendamping melatih tiga ranker pada frame kandidat yang persis sama, menja
 uv run python code/ch10_ltr.py
 ```
 
-Skrip membangun frame pelatihan (cutoff 14 hari sebelum akhir) dan frame evaluasi (7 hari sebelum akhir) satu kali, lalu memakainya kembali untuk setiap model. Blok pertama membandingkan ketiga urutan.
+Skrip membangun frame pelatihan (cutoff 14 hari sebelum akhir) dan frame evaluasi (7 hari sebelum akhir) satu kali, lalu memakainya kembali untuk setiap model. (**Cutoff** adalah saat kita membekukan waktu: model hanya melihat masa lalu dari saat itu, dan hari-hari sesudahnya menjadi kunci jawaban.) Blok pertama membandingkan ketiga urutan.
 
 ```output
 file: results/ch10_ltr.txt
 lines: 1-9
 ```
 
-Bacalah tabel dari atas ke bawah. Heuristic blend mencapai ndcg@20 sebesar 0.1674. Kedua model terlatih mencapai 0.2146 (pointwise) dan 0.2116 (LambdaMART): sekitar 26–28% lebih tinggi, dari kandidat dan label yang sama. Baris terakhir, 0.4645, adalah *batas atas recall kandidat* (*candidate recall ceiling*), yaitu fraksi positif sebenarnya milik pengguna yang memang ada dalam kumpulan kandidat. Recall@20 dari ranker mana pun dibatasi olehnya. Recall@20 LambdaMART sebesar 0.2725 adalah 59% dari yang dapat dicapai oleh pengurutan ulang oracle atas kumpulan yang sama.
+Bacalah tabel dari atas ke bawah. Heuristic blend mencapai ndcg@20 sebesar 0.1674. Kedua model terlatih mencapai 0.2146 (pointwise) dan 0.2116 (LambdaMART): sekitar 26–28% lebih tinggi, dari kandidat dan label yang sama. Baris terakhir, 0.4645, adalah *batas atas recall kandidat* (*candidate recall ceiling*): dari semua hal yang benar-benar dilakukan pengguna dalam jendela jawaban, fraksi yang memang ada dalam kumpulan kandidat. Ranker hanya bisa mengurutkan ulang kumpulan itu, sehingga tidak pernah bisa menemukan item yang tak ada di dalamnya; recall@20 (porsi positif sebenarnya milik pengguna yang masuk 20 teratas) dari ranker mana pun dibatasi oleh batas atas ini. Recall@20 LambdaMART sebesar 0.2725 adalah 59% dari yang dapat dicapai oleh pengurutan ulang oracle atas kumpulan yang sama (*oracle* adalah ranker sempurna yang mengintip jawaban).
 
 ## Hasil
 
 ### Pointwise versus LambdaMART: perbandingan yang jujur
 
-Blok kedua keluaran adalah yang dilewatkan banyak tutorial ranking. Sebuah LightGBM pointwise (`objective="binary"`, label = "apakah ada aksi positif?") dilatih pada baris yang sama dengan hyperparameter yang sama, dan kedua model dilatih ulang dengan empat seed acak berbeda.
+Blok kedua keluaran adalah yang dilewatkan banyak tutorial ranking. Sebuah LightGBM pointwise (`objective="binary"`, label = "apakah ada aksi positif?") dilatih pada baris yang sama dengan hyperparameter yang sama, dan kedua model dilatih ulang dengan empat seed acak berbeda. Mengapa seed? Pelatihan memakai pilihan acak (baris dan kolom mana yang dilihat tiap pohon), sehingga dua kali jalan dengan seed berbeda menghasilkan model yang sedikit berbeda, seperti memanggang kue yang sama empat kali dan mendapat empat kue yang sedikit berlainan. Jika dua metode berbeda kurang dari goyangan antar-jalan itu, kita tak bisa mengatakan salah satunya benar-benar lebih baik. Goyangan itu diukur dengan **simpangan baku** (*standard deviation*, std): kira-kira, jarak tipikal hasil satu kali jalan dari rerata semua jalan.
 
 ```output
 file: results/ch10_ltr.txt
 lines: 11-20
 ```
 
-Model pointwise unggul pada setiap seed. Rerata ndcg@20 adalah 0.2147 berbanding 0.2125, selisih 0.0022, dan simpangan baku antar seed adalah 0.0014 untuk pointwise dan 0.0021 untuk LambdaMART. Selisih itu dengan demikian sekitar satu simpangan baku seed: tandanya konsisten pada keempat seed, tetapi kecil. Pointwise juga unggul pada recall@5 (0.1577 berbanding 0.1503) dan recall@10 (0.2176 berbanding 0.2015). Coverage@20 LambdaMART, yaitu porsi katalog yang muncul di 20 teratas seseorang, adalah yang terendah dari ketiganya (0.4245, dibandingkan 0.4777 untuk pointwise dan 0.5682 untuk heuristic blend).
+Model pointwise unggul pada setiap seed. Rerata ndcg@20 adalah 0.2147 berbanding 0.2125, selisih 0.0022, dan simpangan baku antar seed adalah 0.0014 untuk pointwise dan 0.0021 untuk LambdaMART. Selisih itu dengan demikian sekitar satu simpangan baku seed: tandanya konsisten pada keempat seed, tetapi kecil. Pointwise juga unggul pada recall@5 (0.1577 berbanding 0.1503) dan recall@10 (0.2176 berbanding 0.2015). Coverage@20 LambdaMART, yaitu porsi katalog yang muncul di 20 teratas seseorang (ukuran seberapa beragam rekomendasinya), adalah yang terendah dari ketiganya (0.4245, dibandingkan 0.4777 untuk pointwise dan 0.5682 untuk heuristic blend).
 
 Ini bertentangan dengan prinsip bahwa objektif listwise cocok untuk metrik tingkat daftar. Alasan yang masuk akal:
 
@@ -252,9 +295,7 @@ Semua ini tidak menjadikan LambdaMART pilihan yang salah. Selisihnya sekitar sat
 
 ### Apa yang dipelajari model? Feature importance
 
-Pertanyaan paling sederhana untuk model boosted adalah fitur mana yang paling banyak ia pakai. LightGBM dapat melaporkan total gain per fitur (jumlah gain split dari Langkah 1). `ranker.importance` menormalkan gain menjadi porsi yang berjumlah satu.
-
-`ranker.importance` menormalkan total gain per fitur menjadi porsi yang berjumlah satu. Grafik menampilkan 15 fitur teratas; keluaran memberikan porsi gain per kelompok.
+Pertanyaan paling sederhana untuk model boosted adalah fitur mana yang paling banyak ia pakai. LightGBM dapat melaporkan total gain per fitur (jumlah gain split dari Langkah 1). `ranker.importance` menormalkan gain menjadi porsi yang berjumlah satu, sehingga "0.063" berarti "6.3% dari seluruh kredit penghilangan galat". Grafik menampilkan 15 fitur teratas; keluaran memberikan porsi gain per kelompok (*kelompok* di sini berarti keluarga fitur, misalnya semua fitur item, bukan grup query milik pengguna).
 
 ```output
 file: results/ch10_ltr.txt
@@ -263,18 +304,18 @@ lines: 39-48
 
 ![15 fitur teratas ranker LambdaMART berdasarkan porsi total gain, diwarnai menurut kelompok fitur.](../assets/charts/ch10-importance.png)
 
-Importance-nya *tersebar*: fitur teratas, `ui_max_dwell_sec`, hanya memiliki 6.3% gain. Menurut kelompok, fitur **item** memimpin (0.309), lalu user-item (0.198), user (0.189) dan candidate (0.134); **context** mendapat 0.004. Satu peringatan: gain importance menggambarkan bagaimana pohon dibangun, bukan seberapa besar model akan menderita tanpa suatu fitur; fitur yang berkorelasi berbagi kredit, dan fitur dengan banyak nilai berbeda mendapat lebih banyak kesempatan split. Ablasi memperlihatkan ketidaksesuaian itu.
+Importance-nya *tersebar*: fitur teratas, `ui_max_dwell_sec`, hanya memiliki 6.3% gain. Menurut kelompok, fitur **item** memimpin (0.309), lalu user-item (0.198), user (0.189) dan candidate (0.134); **context** mendapat 0.004. Satu peringatan: gain importance menggambarkan bagaimana pohon dibangun, bukan seberapa besar model akan menderita tanpa suatu fitur. Fitur yang berkorelasi (membawa informasi mirip) berbagi kredit, dan fitur dengan banyak nilai berbeda mendapat lebih banyak kesempatan dipilih untuk split. Ablasi di bawah memperlihatkan ketidaksesuaian itu.
 
 ### Why this? Satu prediksi di bawah mikroskop
 
-Importance merata-ratakan seluruh prediksi; SHAP menjelaskan satu prediksi. Skrip menilai 106 kandidat untuk pengguna 42 dan mencetak kontribusi item teratas (id 2381):
+Importance merata-ratakan seluruh prediksi; SHAP menjelaskan satu prediksi. Skrip menilai 106 kandidat untuk pengguna 42 dan mencetak kontribusi item teratas (id 2381), yang ditaruh ranker di urutan pertama:
 
 ```output
 file: results/ch10_ltr.txt
 lines: 50-63
 ```
 
-Skor mentahnya 1.277 dan bias (baseline untuk kandidat yang biasa-biasa saja) adalah -2.917; baris-baris terakhir mengonfirmasi sifat aditif: kontribusi ditambah bias sama dengan skor model. Delapan kontribusi terbesar berjumlah sekitar +2.73, sehingga 38 fitur lainnya menambahkan sisa +1.47.
+Skor mentahnya 1.277 dan bias (baseline untuk kandidat yang biasa-biasa saja) adalah -2.917. Skor mentah bukan probabilitas dan tidak punya satuan; yang penting hanya urutan skor. Baris-baris terakhir mengonfirmasi sifat aditif: kontribusi ditambah bias sama dengan skor model. Delapan kontribusi terbesar berjumlah sekitar +2.73, sehingga 38 fitur lainnya menambahkan sisa +1.47.
 
 ![Mengapa item 2381 berada di peringkat pertama untuk pengguna 42: delapan kontribusi SHAP terbesar, positif berwarna hijau dan negatif berwarna merah.](../assets/charts/ch10-shap-example.png)
 
@@ -284,9 +325,9 @@ Popover "Why this?" pada aplikasi (`WhyThis.vue`, tangkapan layar di Bab 13) men
 
 ### Ablasi: kelompok fitur mana yang penting, dan dibandingkan dengan apa?
 
-Importance bertanya tentang model yang sudah dilatih. **Ablasi** (*ablation*) mengajukan pertanyaan kontrafaktual: andaikan kita tidak pernah memiliki fitur-fitur ini, apakah modelnya akan lebih buruk? Anda menjawabnya dengan melatih ulang. `pipeline.group_ablation` menghapus satu kelompok fitur pada satu waktu, melatih ulang dengan pengaturan yang sama, dan melaporkan perubahan tiap metrik terhadap model penuh.
+Importance bertanya tentang model yang sudah dilatih. **Ablasi** (*ablation*) mengajukan pertanyaan kontrafaktual: andaikan kita tidak pernah memiliki fitur-fitur ini, apakah modelnya akan lebih buruk? Ini seperti membuang satu bahan dari resep lalu memanggang lagi untuk melihat apakah kuenya jadi lebih buruk. Anda menjawabnya dengan melatih ulang. `pipeline.group_ablation` menghapus satu kelompok fitur pada satu waktu, melatih ulang dengan pengaturan yang sama, dan melaporkan perubahan tiap metrik terhadap model penuh.
 
-`pipeline.group_ablation` melatih ulang tanpa tiap kelompok fitur, dan juga melatih ulang model *penuh* dengan seed 1, 2 dan 3. Simpangan baku mereka adalah **noise floor** (batas derau): delta yang lebih kecil darinya tidak memberi tahu apa-apa, karena seed lain dapat membalik tandanya.
+`pipeline.group_ablation` melatih ulang tanpa tiap kelompok fitur, dan juga melatih ulang model *penuh* dengan seed 1, 2 dan 3. Simpangan baku mereka adalah **noise floor** (batas derau): memanggang resep penuh berulang kali menghasilkan kue yang sedikit berlainan, sehingga perubahan yang lebih kecil dari goyangan itu tidak memberi tahu apa-apa, karena seed lain dapat membalik tandanya. **Delta** hanyalah perubahan sebuah metrik (versi tanpa kelompok dikurangi model penuh): negatif berarti model memburuk tanpa kelompok itu.
 
 ```output
 file: results/ch10_ltr.txt
@@ -306,12 +347,12 @@ Bandingkan dengan gain importance: kelompok candidate memiliki 13.4% gain dan ke
 
 ## Jebakan dan praktik produksi
 
-- **Kebocoran (*leakage*).** Sebuah fitur bocor menaikkan ndcg@20 offline dari 0.2116 yang jujur menjadi 0.5035 di Bab 9. Bangun fitur per cutoff lewat `History.at` dan pertahankan `tests/test_point_in_time.py`.
+- **Kebocoran (*leakage*).** Fitur yang diam-diam memuat informasi dari masa depan (kunci jawaban) membuat skor offline tampak hebat dan skor produksi ambruk. Sebuah fitur bocor menaikkan ndcg@20 offline dari 0.2116 yang jujur menjadi 0.5035 di Bab 9. Bangun fitur per cutoff lewat `History.at` dan pertahankan `tests/test_point_in_time.py`.
 - **Batas grup.** `group=` milik LightGBM adalah daftar ukuran berurutan; baris yang tidak terurut berjalan tanpa peringatan dan melatih sampah. Urutkan dulu, seperti yang dilakukan `ranker.train`.
-- **Skor tidak punya skala.** Jangan menerapkan ambang pada skor LambdaMART atau mencampurnya dengan probabilitas; gunakan model pointwise atau kalibrasi bila probabilitas diperlukan.
-- **Desain label adalah desain produk.** Tabel click 1 / cart 2 / order 3 adalah opini bisnis; tim produksi sering melatih beberapa *head* terpisah lalu menggabungkannya (Bab 14).
-- **Retrain sebagai deploy.** Service melatih ulang setiap enam jam dan dari tombol admin; tolak menukar dengan model yang lebih buruk daripada baseline heuristik.
-- **Penjelasan bukan sebab-akibat.** Batang SHAP hanya menyatakan bahwa sebuah nilai mendorong skor naik relatif terhadap baseline, tidak lebih.
+- **Skor tidak punya skala.** Skor LambdaMART hanya bermakna untuk mengurutkan. Jangan menerapkan ambang padanya ("tampilkan jika di atas 0.5") atau mencampurnya dengan probabilitas; gunakan model pointwise atau **kalibrasi** (menyesuaikan skor agar "0.3" benar-benar berarti peluang 30%) bila probabilitas diperlukan.
+- **Desain label adalah desain produk.** Tabel click 1 / cart 2 / order 3 adalah opini bisnis tentang apa hasil yang baik; tim produksi sering melatih beberapa *head* terpisah (satu model per hasil, misalnya klik dan order) lalu menggabungkannya (Bab 14).
+- **Retrain sebagai deploy.** Service melatih ulang setiap enam jam dan dari tombol admin; tolak menukar dengan model yang lebih buruk daripada baseline heuristik, karena kalau tidak, hasil latihan yang buruk langsung sampai ke pengguna.
+- **Penjelasan bukan sebab-akibat.** Batang SHAP hanya menyatakan bahwa sebuah nilai mendorong skor naik relatif terhadap baseline, tidak lebih. Ia tidak menyatakan bahwa mengubah fitur itu akan membuat pembeli membeli.
 
 ## Ringkasan
 
