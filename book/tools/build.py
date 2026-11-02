@@ -476,7 +476,8 @@ def main() -> int:
         src = args.src or BOOK / lang
         try:
             doc = assemble(lang, src)
-            html_path = BOOK / "build" / f"book-{lang}.html"
+            # With --out, keep the HTML next to that PDF so concurrent test builds don't overwrite each other.
+            html_path = (args.out.with_suffix(".html") if args.out else BOOK / "build" / f"book-{lang}.html").resolve()
             html_path.write_text(doc)
             print(f"[{lang}] wrote {html_path.relative_to(ROOT)} ({len(doc) // 1024} KiB)")
             if args.html_only:
