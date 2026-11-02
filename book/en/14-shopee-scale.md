@@ -254,7 +254,9 @@ def final_score(p, cands, w=(1.0, 2.0, 3.0), ads_weight=0.0):
     return base * (1.0 + boost) + ads
 ```
 
-The weights `(1.0, 2.0, 3.0)` echo the label scheme of this book (click 1, cart 2, order 3) but are now *explicit and tunable*. ## Run it: the book's leaderboard
+The weights `(1.0, 2.0, 3.0)` echo the label scheme of this book (click 1, cart 2, order 3) but are now *explicit and tunable*.
+
+## Run it: the book's leaderboard
 
 The chapter's figure aggregates every method evaluated in this book on the same simulated users, the same labels and the same 7-day evaluation window. Regenerate it, and the headline comparison it summarises, with:
 

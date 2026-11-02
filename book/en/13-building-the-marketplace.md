@@ -142,7 +142,9 @@ Source: Mozilla Contributors, MDN Web Docs, 2026
 
 ### The events table
 
-Everything the recommender knows about behaviour comes from one append-only table, `events` in `backend/migrations/0001_init.sql`: `ts`, `user_id`, `session_id`, `item_id`, `event_type`, `position`, `dwell_sec`, `price_paid`, `surface`. ```include
+Everything the recommender knows about behaviour comes from one append-only table, `events` in `backend/migrations/0001_init.sql`: `ts`, `user_id`, `session_id`, `item_id`, `event_type`, `position`, `dwell_sec`, `price_paid`, `surface`.
+
+```include
 path: backend/migrations/0001_init.sql
 region: events_table
 ```

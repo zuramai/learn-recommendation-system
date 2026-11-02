@@ -50,7 +50,11 @@ pre code { background: none; padding: 0; }
 .output-block pre { margin: 0; background: #f3f4f6; color: #111; border: 1px solid #d1d5db; border-top: 0;
                     border-radius: 0 0 3px 3px; padding: 2.5mm 3mm; font-size: 8pt; line-height: 1.3;
                     white-space: pre-wrap; word-break: break-word; }
+/* Keep a labelled block together when it fits; when it is taller than a page, let the code
+   break inside instead of pushing it to the next page and stranding the label. */
 .code-block, .highlight { break-inside: avoid; }
+.code-block .highlight { break-inside: auto; }
+.code-label { break-after: avoid; }
 
 /* tables */
 table { border-collapse: collapse; margin: 0 0 1em; font-size: 9.5pt; max-width: 100%; break-inside: avoid; }
@@ -87,3 +91,7 @@ li.q { margin-bottom: 0.4em; }
 h2 + p.q { margin-top: 0.3em; }
 blockquote { border-left: 3px solid #d1d5db; margin: 0 0 1em; padding: 0 0 0 4mm; color: #444; }
 .katex-display { break-inside: avoid; overflow-x: hidden; }
+
+/* appendices (answers, glossary, bibliography) are reference material: set slightly denser */
+section.appendix { font-size: 10pt; line-height: 1.4; }
+section.appendix p { margin: 0 0 0.6em; }

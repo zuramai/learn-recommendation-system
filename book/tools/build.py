@@ -435,6 +435,19 @@ def assemble(lang: str, src: Path) -> str:
             f"<script>{js}</script><script>{PAGE_SCRIPT}</script></body></html>")
 
 
+CONTENT_WIDTH_PX = round((210 - 2 * 18) / 25.4 * 96)  # A4 text width in CSS px
+OVERFLOW_JS = """(limit) => {
+  const out = [];
+  for (const el of document.querySelectorAll('section.chapter > *, section > *')) {
+    if (el.scrollWidth > limit + 4 && !el.closest('.katex-mathml')) {
+      const h = el.closest('section')?.querySelector('h1')?.textContent ?? '?';
+      out.push(`${h}: <${el.tagName.toLowerCase()}> ${el.scrollWidth}px: ${(el.textContent || '').trim().slice(0, 80)}`);
+    }
+  }
+  return out.slice(0, 10);
+}"""
+
+
 def build_pdf(html_path: Path, pdf_path: Path) -> int:
     from playwright.sync_api import sync_playwright
     from pypdf import PdfReader
@@ -442,7 +455,8 @@ def build_pdf(html_path: Path, pdf_path: Path) -> int:
     pdf_path.parent.mkdir(parents=True, exist_ok=True)
     with sync_playwright() as pw:
         browser = pw.chromium.launch()
-        page = browser.new_page()
+        # Viewport = A4 width minus the 18 mm side margins, so the overflow check below sees print layout.
+        page = browser.new_page(viewport={"width": CONTENT_WIDTH_PX, "height": 1000})
         page.on("pageerror", lambda e: print(f"  [page error] {e}", file=sys.stderr))
         page.goto(html_path.resolve().as_uri())
         page.wait_for_function("window.__bookReady === true", timeout=120000)
@@ -450,6 +464,12 @@ def build_pdf(html_path: Path, pdf_path: Path) -> int:
         if errors:
             browser.close()
             raise BuildError("render errors in page:\n  " + "\n  ".join(errors))
+        overflow = page.evaluate(OVERFLOW_JS, CONTENT_WIDTH_PX)
+        if overflow:
+            browser.close()
+            # Chromium would silently shrink EVERY page to fit the widest element.
+            raise BuildError("content wider than the page (usually a glued ``` fence or an indented "
+                             "paragraph turned into a code block):\n  " + "\n  ".join(overflow))
         page.pdf(
             path=str(pdf_path), format="A4", print_background=True,
             display_header_footer=True,
