@@ -131,7 +131,7 @@ Sumber: Carbonell et al., SIGIR, 1998
 :::
 
 ::: fact
-**Diversitas bisa menurunkan akurasi rata-rata namun tetap meningkatkan kepuasan.** Ziegler dan rekan-rekan memperkenalkan "topic diversification" dan metrik intra-list similarity untuk daftar rekomendasi. Mereka melaporkan bahwa, meskipun merugikan akurasi rata-rata, metode itu meningkatkan kepuasan pengguna, yang mereka uji dalam studi daring dengan lebih dari 2.100 subjek, terutama untuk daftar yang dihasilkan oleh collaborative filtering berbasis item.
+**Diversitas bisa menurunkan akurasi rata-rata namun tetap meningkatkan kepuasan.** Ziegler dan rekan-rekan memperkenalkan "topic diversification" dan metrik intra-list similarity untuk daftar rekomendasi. Mereka melaporkan bahwa, meskipun merugikan akurasi rata-rata, metode itu meningkatkan kepuasan pengguna, yang mereka uji dalam studi daring dengan lebih dari 2,100 subjek, terutama untuk daftar yang dihasilkan oleh collaborative filtering berbasis item.
 
 Sumber: Ziegler et al., WWW, 2005
 :::
