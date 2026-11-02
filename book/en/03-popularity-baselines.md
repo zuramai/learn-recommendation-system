@@ -12,6 +12,21 @@ That query is the oldest recommender in the world. It is also the one every seri
 - How a tiny amount of personalisation, "popular in the categories you like", more than doubles ndcg@20 over the best global list.
 - What popularity bias is, why coverage collapses, and what production systems do about it.
 
+**Words you will meet in this chapter** (each is explained again where it first matters):
+
+| Term | Plain meaning |
+|---|---|
+| **Baseline** | The simplest sensible method. Any cleverer method only counts if it beats it. Think of the time a casual jogger runs a 5 km course: a new training plan is only "better" if you beat that time. |
+| **Yardstick** | The same thing seen from the other side: the baseline is the ruler we hold every other method against. |
+| **SQL query** | A one-line question asked to a database, such as "count orders per item and give me the top 20". |
+| **Event** | One logged action: a click, an add-to-cart, or an order. |
+| **Cold start** | A new visitor or a new item with no history yet, so there is nothing to personalise with. |
+| **Fallback** | Plan B: what we show when the main method has nothing to say. |
+| **Candidate source** | A cheap method that proposes a shortlist of items, which a heavier model then sorts more carefully. |
+| **Feature** | A number describing a user or an item (for example "how many clicks this week") that a model reads as input. |
+| **Hyperparameter** | A setting *you* choose by hand and test, instead of one the computer learns from data. The window length in days is one. |
+| **ndcg@20, recall@20, coverage@20** | Chapter 2 metrics, each looking at a 20-item list. *ndcg*: a score that rewards putting the right items near the top. *recall*: the share of what the user really touched afterwards that our 20 items contain. *coverage*: the share of the whole catalogue that is recommended to at least one user. |
+
 ## Intuition: the shelf at the front of the shop
 
 Imagine a neighbourhood bookstore. The owner knows nothing about you the first time you walk in, so what does she do? She puts the bestsellers on the table right by the door. She does not need to know your taste: a book that hundreds of other people bought is a decent bet for a stranger. That table is a **global popularity recommender**: one ranking, the same for everyone.
@@ -19,7 +34,7 @@ Imagine a neighbourhood bookstore. The owner knows nothing about you the first t
 Now notice what a clever shopkeeper adds over time.
 
 1. **She forgets slowly.** A book that sold 500 copies last year but only two last week is not on the table any more. That is *time decay*: recent sales count more than old ones. A shop that never forgets ends up decorating the front table with last season's hits.
-2. **She does not trust tiny samples.** A book with a perfect five-star score from one reviewer, the author's cousin, should not beat a book with 4.7 stars from two thousand readers. That is *shrinkage*, or the Bayesian average: when evidence is thin, lean on what you know about books in general.
+2. **She does not trust tiny samples.** A book with a perfect five-star score from one reviewer, the author's cousin, should not beat a book with 4.7 stars from two thousand readers. That is *shrinkage*, or the **Bayesian average**: when evidence is thin, we start from what we know about books in general (the "prior guess") and move away from it only as fast as real evidence arrives. We will do this with numbers in Method 4.
 3. **She notices who you are.** Once you say you like cooking, she walks you to the cookbook shelf, and *there* she again points at the bestsellers. She did not use any sophisticated model of your taste; she just intersected "what you like" with "what is popular". That is **personalised popularity**, and it is the bridge from this chapter to the rest of the book.
 
 Every one of those moves has a precise numeric form. None of them needs more than a pandas `groupby`. And yet, as we will see in the results, the third move alone gets a score 2.5 times higher than the plain bestseller table.
@@ -51,6 +66,8 @@ The marketplace logs many event types, but only three are *positive* signals: a 
 
 Everything in this chapter reads from that one table. Let $w_e$ be the weight of event $e$, and $a_e$ its age in days.
 
+A tiny example. Suppose shopper Sari clicks a cat-food bag twice and orders it once. That bag collects $1 + 1 + 5 = 7$ points from her. Every shopper's events pile up on the items in the same way. The cutoff is the moment we freeze time (as in Chapter 2): only events before it are used, and `age_days` is how many days before the cutoff each event happened.
+
 ### Method 1: Global popularity
 
 The simplest scoring rule is to sum the weights for each item over all history:
@@ -58,6 +75,8 @@ The simplest scoring rule is to sum the weights for each item over all history:
 $$
 \text{pop}(i) = \sum_{e \,:\, \text{item}(e)=i} w_e .
 $$
+
+Read the symbols out loud: $\sum$ means "add up"; the small text underneath says *which* numbers to add: the weights $w_e$ of every event $e$ whose item is $i$. Example: a cat-food bag with 10 clicks, 2 add-to-carts and 1 order has $10\times1 + 2\times3 + 1\times5 = 21$ points. A phone case with 3 orders has $15$ points, so the bag ranks above the case.
 
 Sort descending and you have a bestseller list. Its virtue is that it is trivial, robust, and it needs no user information, so it works for visitors who have never logged in. Its vice is that it is blind to time: an item that was a monster hit six weeks ago and is dead today still sits near the top.
 
@@ -69,27 +88,33 @@ $$
 \text{pop}_W(i) = \sum_{e \,:\, \text{item}(e)=i,\; a_e < W} w_e .
 $$
 
+In words: *look only at the last $W$ days of receipts and ignore everything older.* The condition $a_e < W$ is the "is this event younger than $W$ days?" test. Example with $W = 7$: an item has clicks aged 2, 5 and 9 days. The first two count (2 points), the 9-day-old click is ignored.
+
 With $W=7$ this is the "trending this week" list, and it is exactly what `candidates.item_popularity(hist, 7)` computes. The window is a blunt tool: an event 6.9 days old counts fully, one 7.1 days old counts for nothing. There is also a statistical price. Fewer events means a noisier count: if an item sells ten units a week, the weekly count fluctuates a lot just by chance.
 
 ### Method 3: Exponential time decay
 
-Instead of a cliff we can use a smooth slope. Every event loses value as it ages, and the usual choice is exponential decay controlled by a **half-life** $h$: the age at which an event is worth half as much as a fresh one.
+Instead of a cliff we can use a smooth slope: **every event loses value as it gets older, and the loss follows a fixed rule.** The rule we use says: *after a fixed number of days, an event is worth exactly half of what it was.* That number of days is the **half-life** $h$. With $h = 7$ days, a click from today counts 1, the same click a week from now counts 0.5, two weeks from now 0.25, three weeks from now 0.125, and so on. Without any fading, a pile of old clicks can outweigh fresh ones forever; with fading, last season's hit slowly drops off the list. The formula that does this is
 
 $$
 d(a) = 2^{-a/h} = e^{-\lambda a}, \qquad \lambda = \frac{\ln 2}{h}.
 $$
 
-The two forms are the same function. The first is easier to reason about (every $h$ days the weight halves); the second is the one calculus likes. With $h = 7$ days, the repository's `HALF_LIFE_DAYS`, we get $\lambda = 0.693/7 \approx 0.099$ per day. The decayed popularity is
+The two forms are the same function. In the first, the exponent $-a/h$ simply counts *how many half-lives have passed* (age 14 with $h=7$ is two half-lives, so the weight is $\tfrac12\times\tfrac12$). The second form uses the number $e \approx 2.718$ and the natural logarithm $\ln$; it is the same curve written the way calculus likes, and you can skip it. With $h = 7$ days, the repository's `HALF_LIFE_DAYS`, we get $\lambda = 0.693/7 \approx 0.099$ per day. The decayed popularity of an item is simply the sum of *each event's weight times its fading factor*:
 
 $$
 \text{pop}_{\text{decay}}(i) = \sum_{e \,:\, \text{item}(e)=i} w_e \cdot 2^{-a_e/h}.
 $$
 
-Let us sanity check that the shape is what we claim. At age 0 the weight is 1. At age 7 it is $2^{-1} = 0.5$. At 14 it is $2^{-2} = 0.25$, at 21 it is $0.125$. After a month it is about 5%, and an event from the start of the history is worth almost nothing. The script prints these numbers, and the chart plots them.
+Let us sanity check that the shape is what we claim. At age 0 the weight is 1. At age 7 it is $2^{-1} = 0.5$. At 14 it is $2^{-2} = 0.25$, at 21 it is $0.125$. After a month it is about 5%, and an event from the start of the history is worth almost nothing. The script prints these numbers, and the chart plots them. In the chart, the line falls fast at first and then flattens: each week removes half of *what is left*, never a fixed amount.
 
 ![Exponential decay with a 7-day half-life: the weight halves every seven days, from 1 at age zero to 0.5, 0.25 and 0.125 at ages 7, 14 and 21.](../assets/charts/ch03-decay-curve.png)
 
-Exponential decay is the production default for three reasons. It is **memoryless**: relative value depends only on the gap between events, so re-scoring tomorrow does not change the ranking. It **updates incrementally**: keep one number $S$ per item and set $S \leftarrow S\cdot 2^{-(t-t_{\text{last}})/h} + w$ on each event, one multiply and one add. And it has **one intuitive knob**: to make an event worth 10% after 30 days, solve $2^{-30/h}=0.1$, giving $h = 30\ln 2/\ln 10 \approx 9.0$ days.
+Exponential decay is the production default for three reasons.
+
+1. **Ranking does not flip just because time passes.** Tomorrow, every event is one day older, so every score is multiplied by the *same* factor ($2^{-1/7} \approx 0.906$). All items shrink together and their order stays. (The technical name is *memoryless*: the value of an event relative to another depends only on the gap between them.)
+2. **It updates cheaply.** You do not need to re-read the whole history. Keep one running number $S$ per item. When a new event with weight $w$ arrives, first fade the old total for the time since the last event, then add: $S \leftarrow S\cdot 2^{-(t-t_{\text{last}})/h} + w$. That is one multiplication and one addition. (This is called *incremental* updating.) For example, if $S = 2.55$ today and nothing happens tomorrow, then tomorrow $S = 2.55 \times 0.906 \approx 2.31$.
+3. **It has one intuitive knob.** You choose how fast interest fades by picking $h$. To make an event worth 10% after 30 days, solve $2^{-30/h}=0.1$. Since $2^{3.32} \approx 10$, we need $30/h = 3.32$, giving $h = 30\ln 2/\ln 10 \approx 9.0$ days.
 
 ### A tiny worked example
 
@@ -105,9 +130,9 @@ All-time says B because it never forgets. The 7-day window says A, but only beca
 
 ### Method 4: The Bayesian average (not trusting small samples)
 
-So far we ranked by *demand*. Another popular signal is *quality*: the average star rating. But averages lie when the sample is small. A product with a single 5-star rating has an average of 5.0, higher than a bestseller with 4.8 from thousands of buyers. We want a score that starts at the *global* mean when there is no evidence and gradually moves to the item's own mean as evidence piles up.
+So far we ranked by *demand* (how often people act on an item). Another popular signal is *quality*: the average star rating. But averages can lie when they rest on few ratings. Think of a football player who scored in his only match: "1.0 goals per match" looks better than a star striker's 0.8 over 300 matches, but nobody believes it. A fair judge would treat the newcomer as if he had already played a number of extra matches at the league average. That is exactly the trick here. A product with a single 5-star rating has an average of 5.0, higher than a bestseller with 4.8 from thousands of buyers. We want a score that starts at the *global* mean when there is no evidence and gradually moves to the item's own mean as evidence piles up.
 
-Let $R$ be an item's average rating, $v$ its number of ratings, $C$ the average rating of all items, and $m$ a **prior strength**: how many ratings of "imaginary evidence" at the global mean we add. The Bayesian average is
+Let $R$ be an item's average rating, $v$ its number of ratings, $C$ the average rating of all items (the "prior guess": what we expect for an item we know nothing about), and $m$ a **prior strength**: how many ratings of "imaginary evidence" at the global mean we add. ("Prior" just means "what we believed before looking at this item's data"; "Bayesian" means we mix that belief with the evidence.) The Bayesian average, written WR for *weighted rating*, is
 
 $$
 \text{WR} = \frac{v}{v+m}\, R + \frac{m}{v+m}\, C .
@@ -129,7 +154,11 @@ $$
 \text{WR} = \tfrac{20}{120}\cdot 4.8 + \tfrac{100}{120}\cdot 4.0 = 0.8 + 3.33 = 4.13 .
 $$
 
-The item looks great (4.8), but twenty ratings is not much, so the estimate stays close to the prior. The same arithmetic works on a conversion rate: 3 clicks in 10 impressions (30% raw) with a 5% global CTR and strength 50 smooths to $(3+2.5)/60 = 9.2\%$, while 50 clicks in 1,000 impressions stays at 5.0%. Small samples are shrunk hard; large ones barely move.
+Walk through it. The weight on the item's own average is $20/120 \approx 0.17$ and the weight on the global mean is $100/120 \approx 0.83$. So 4.13 is 17% "this item's 4.8" and 83% "typical item's 4.0".
+
+The item looks great (4.8), but twenty ratings is not much, so the estimate stays close to the prior.
+
+The same arithmetic works on a conversion-style rate. Here a *click* is a user clicking an item, an *impression* is one time the item was shown, and CTR (click-through rate) is clicks ÷ impressions. Take 3 clicks in 10 impressions (30% raw) with a 5% global CTR and strength 50: it smooths to $(3+2.5)/60 = 9.2\%$, while 50 clicks in 1,000 impressions stays at 5.0%. Small samples are shrunk hard; large ones barely move.
 
 ::: fact
 **The "Top 250" is a Bayesian average.** IMDb publicly documents the formula it uses to rank its Top 250 films: weighted rating = (v ÷ (v+m)) × R + (m ÷ (v+m)) × C, where R is the title's mean rating, v its number of ratings, m the minimum ratings required to be listed (currently 25,000), and C the mean rating across all titles. IMDb itself calls this "a true Bayesian estimate". It is exactly the formula in this section.
@@ -139,14 +168,16 @@ Source: IMDb, IMDb Help Center, 2026
 
 ### Method 5: Popular in the categories *you* like
 
-The first four methods return the *same list for every user*. The last one adds the smallest imaginable dose of personalisation. It uses two ingredients that the repository already computes.
+The first four methods return the *same list for every user*. The last one adds the smallest imaginable dose of **personalisation** (showing different things to different people). The idea in one sentence: *take the bestsellers, but only from the shelves this user spends time at.* It uses two ingredients that the repository already computes.
 
-1. **Category affinity** $s_{u,c}$: the share of user $u$'s (decayed) activity, clicks, carts, orders *and* searches, that falls in category $c$. It sums to 1 over categories for each user, and is produced by `candidates.category_affinity`.
-2. **Normalised popularity within a category**: for item $i$ in category $c(i)$,
+1. **Category affinity** $s_{u,c}$: how much user $u$ likes category $c$, measured as the share of their (decayed) activity (clicks, carts, orders *and* searches) that falls in $c$. For each user the shares add up to 1 (like a pie chart of their interests). It is produced by `candidates.category_affinity`.
+2. **Normalised popularity within a category** ("normalised" = rescaled so the best item is 1): for item $i$ in category $c(i)$,
 
 $$
 \tilde p(i) = \frac{\text{pop}_7(i)}{\max_{j \in c(i)} \text{pop}_7(j)} \in [0,1].
 $$
+
+Read it as: this item's weekly points divided by the weekly points of the *best* item of the same category ($\max$ = the biggest value). The result lies between 0 and 1 (the notation $\in [0,1]$).
 
 The best item of each category gets 1, the rest are fractions of it. The final score multiplies them:
 
@@ -154,7 +185,9 @@ $$
 \text{score}(u, i) = s_{u,\,c(i)} \cdot \tilde p(i).
 $$
 
-Why normalise within the category? Without it, a huge category such as Snacks would drown out everything else. With it, every category has the same "ceiling", and the user's affinity decides *which categories' stars* appear. A tiny extra term (a millionth of the global popularity) breaks ties and gives users with *no* history, who have all-zero affinity, the plain `pop_7d` list as a fallback.
+Why normalise within the category? Without it, a huge category such as Snacks would drown out everything else: imagine its best item sold 900 points' worth and the best cat-food item only 90. After dividing, both get 1. Every category then has the same "ceiling", and the user's affinity decides *which categories' stars* appear.
+
+A tiny extra term is also added: a millionth of the global popularity. It matters only for *ties*, where two items would otherwise get exactly the same score. Users with *no* history have all-zero affinity, so every score would be 0; the extra term leaves them with the plain `pop_7d` ranking, which is the safety net.
 
 Worked example: Sari spends 60% of her activity on Cat Food, 30% on Dog Toys and 10% on Skincare. The best cat-food item scores $0.6\times1=0.6$, the runner-up at 80% of its popularity $0.48$, the best dog toy $0.3$, the best skincare item only $0.1$. Her feed is mostly pet items, ordered by popularity within each shelf.
 
@@ -163,6 +196,8 @@ Worked example: Sari spends 60% of her activity on Cat Food, 30% on Dog Toys and
 
 Source: Abdollahpouri et al., RMSE Workshop at RecSys, 2019
 :::
+
+In plain words: when a system is trained to be right on average, it learns that popular items are the safest bet, so it keeps recommending them, even to people who would have loved something less known.
 
 ## Code walkthrough
 
@@ -179,6 +214,8 @@ symbol: History.interactions
 
 It keeps only event types that appear in `EVENT_WEIGHT` and adds the weight column `w`. The `age_days` column is attached when the `History` is built. Everything below is a different reduction of these rows.
 
+(A `pandas` column of numbers is called a *Series*; a `DataFrame` is a table of such columns. `History.interactions()` returns a DataFrame with one row per event.)
+
 ### Time decay in one line
 
 ```include
@@ -187,6 +224,8 @@ symbol: _decay
 ```
 
 That is the entire half-life formula: `0.5 ** (age_days / HALF_LIFE_DAYS)`. Because it is applied to a whole pandas Series, it works on millions of events at once, with no Python loop. The constant `HALF_LIFE_DAYS = 7.0` is declared at the top of `candidates.py`. Notice that the function is private (leading underscore) but used by several retrievers: `recent` multiplies each interaction's weight by it, and `category_affinity` uses it for both clicks and searches. The same curve therefore expresses "how long does interest last" everywhere in the first stage.
+
+In plain words: "multiply by one half for every seven days of age". Because it is applied to a whole column at once ("vectorised"), pandas does the loop in fast compiled code.
 
 ### Hard-window popularity
 
@@ -197,6 +236,8 @@ symbol: item_popularity
 
 Three operations: take positive interactions, keep rows with `age_days < window_days`, sum weights per item. Note the strict `<`: an event aged exactly `window_days` is *excluded*. The function returns a `pd.Series` indexed by `item_id`, and items with no events in the window are simply absent, so callers must `fillna(0)`. The "trending" retriever (with a 3-day window), the category-popular retriever (7 days) and `similar_items` all call it, so the whole system shares *one* definition of "popular" and only the window changes.
 
+"Series indexed by `item_id`" means a column of numbers where each number is labelled by its item. `fillna(0)` replaces "missing" with 0, so items without events in the window score 0 instead of being absent.
+
 ### Smoothing
 
 ```include
@@ -205,6 +246,8 @@ symbol: _smoothed
 ```
 
 Again a one-liner, and again exactly the formula: `(num + prior * strength) / (den + strength)`. Map the Bayesian average onto it by setting `num` to total stars, `den` to the number of ratings, `prior` to $C$ and `strength` to $m$. Elsewhere in `features.py` it is called with different strengths: 20 pseudo-impressions for a user's CTR, 50 for an item's CTR, 20 for conversion and 10 for return rate. These values are tuned by feel, not learned; the smaller the typical denominator for a statistic, the smaller the strength you can afford.
+
+A "pseudo-impression" is an imaginary extra view added to the data, the same idea as the imaginary extra ratings in Method 4. "Tuned by feel" means a person picked the numbers after trying a few, instead of the computer learning them.
 
 ### The experiment script
 
@@ -221,6 +264,8 @@ symbol: recs_from_scores
 ```
 
 The stable sort matters: many items tie at zero, and an unstable sort would make runs irreproducible.
+
+"Stable" means that when two items have the same score, they stay in their original order. Without it, ties could be shuffled differently on each run, and you could not repeat your results.
 
 Now the scorers themselves. The first three are nearly one-liners (they sit at module level in the script):
 
@@ -246,6 +291,8 @@ region: ch03_personal
 ```
 
 `A` has one row per evaluation user and one column per category; `P` has one row per category and one column per item, and is non-zero only where the item belongs to the row's category. The matrix product therefore gives, for each user and item, exactly $s_{u,c(i)}\,\tilde p(i)$. The trailing term is the tie-breaker described earlier.
+
+Concretely, if Sari's row of `A` is 0.6 for Cat Food, 0.3 for Dog Toys and 0.1 for Skincare, then multiplying by `P` gives each item its category's weight times its normalised popularity, exactly the worked example above. One matrix product does this for every user and item at once.
 
 ## Run it
 
@@ -291,6 +338,8 @@ The decay curve in Figure 3.2 confirms the arithmetic. The printed weights agree
 
 Read the main table row by row. We focus on ndcg@20 (the single number that rewards putting hits near the top) and recall@20 (how many of the user's held-out interactions we found in 20 slots).
 
+A quick reminder of how to read these numbers: both go from 0 to 1 and higher is better. Absolute values look small because we only have 20 slots and the catalogue is large, so what matters is the *ratio* between methods.
+
 **Random is the floor.** `random` reaches ndcg@20 of 0.0035 and recall@20 of 0.0090. Nothing in this chapter is allowed to score lower, and anything that does is broken. Its coverage is 1.0000: every item gets recommended to somebody. We will return to the oddity that the *worst* method has the *best* coverage.
 
 **Global popularity is already roughly fourteen to fifteen times better than random in ndcg@20.** `pop_all_time` scores ndcg@20 0.0527 and recall@20 0.0914, `pop_7d` scores 0.0475 and 0.0786 and `pop_decay` lands in between with 0.0491 and 0.0813. The gap between random and the cheapest sensible method is far bigger than the gaps among the sensible ones. Most of the achievable "easy" value lives in simply knowing which items people want.
@@ -298,6 +347,8 @@ Read the main table row by row. We focus on ndcg@20 (the single number that rewa
 **All-time slightly beats the 7-day window, which is the opposite of what intuition suggests.** Many practitioners expect "trending" to win. It does not here, and the reason is a property of *this data*: in the simulator, each item has a fixed hidden quality, so an item's hidden quality does not change and an item that was popular a month ago is still popular. Under stable popularity, more history means less noise, and the 53-day count is a better estimate of the same underlying number than a one-week count is. The decay variant sits between the two for exactly that reason: its effective window is longer than seven days but still downweights the old.
 
 At deeper cut-offs the decayed list is much closer to the all-time list (recall@50 is 0.1557 versus 0.1575, while the hard window falls to 0.1335): a smooth slope keeps the long tail of evidence that a cliff discards.
+
+"Long tail of evidence" means the many older events. A hard window throws them away; decay keeps them but gives them little weight. "Noise" means random ups and downs in a count that come from chance, not from real popularity.
 
 ::: warning
 Do not take "all-time beats 7-day" as a law of nature. It says that the *simulated* catalogue has stationary popularity. On a real marketplace, flash sales, viral products, seasonal categories (Ramadan, 9.9, 11.11) make popularity drift, and the windowed or decayed list typically wins. The lesson is to **measure on your own data**, and to treat the window or half-life as a hyperparameter tuned on a validation week.
@@ -324,18 +375,18 @@ The table makes it visible. The three global methods all have coverage@20 of 0.0
 Production systems address it in layers, none of which is a baseline's job but all of which build on one:
 
 - **Personalisation** (the rest of this book) reduces the dominance of a single global list.
-- **Exploration**: reserve a few slots for items with little data, and show them often enough to measure. Chapter 11 introduces ε-greedy and Thompson sampling.
-- **Position-bias correction** so that "was clicked" is not mistaken for "is relevant" when the item was merely put at position 1 (Chapter 12).
-- **Calibrated or diversified re-ranking** such as MMR, so the top 20 is not twenty near-duplicates (Chapter 11).
+- **Exploration**: reserve a few slots for items with little data, and show them often enough to measure how good they are. Chapter 11 introduces ε-greedy (with a small probability ε, show a random or little-known item instead of the current best) and Thompson sampling (show each item in proportion to how likely it is to be the best).
+- **Position-bias correction** so that "was clicked" is not mistaken for "is relevant" when the item was merely put at position 1, where people click the most just because it is on top (Chapter 12).
+- **Calibrated or diversified re-ranking** such as MMR (Maximal Marginal Relevance: build the list step by step, choosing items that are relevant but not too similar to those already chosen), so the top 20 is not twenty near-duplicates (Chapter 11).
 - **Normalising by exposure**: use click-through rate with smoothing instead of raw click counts, so that items are rewarded for *conversion per view*, not for how often they were placed on the page. This is where `_smoothed` comes back in.
 
 ### Choosing the window and half-life
 
-Both $W$ and $h$ are hyperparameters. Too short chases noise (a one-hour flash sale decides the list); too long serves yesterday's news. Fashion, electronics and food move at different speeds, so some marketplaces use one half-life per top-level category. Try three values (say 3, 7, 14 days) on a held-out week, as the hands-on exercise asks.
+Both $W$ (the window length) and $h$ (the half-life) are hyperparameters: settings we choose by hand and test on a *held-out* week, meaning a week of data we did not use to build the lists. Too short chases noise (a one-hour flash sale decides the list); too long serves yesterday's news. Fashion, electronics and food move at different speeds, so some marketplaces use one half-life per top-level category. Try three values (say 3, 7, 14 days) on a held-out week, as the hands-on exercise asks.
 
 ### Do not mix scales, count users
 
-Scales of `pop_7d`, `pop_decay` and a $[1,5]$ rating are not comparable: normalise to $[0,1]$ before blending, or feed each to a ranker as a separate feature. And count distinct users (or cap each user's contribution), since one shopper clicking 40 times inflates a score by 40.
+Scales of `pop_7d`, `pop_decay` and a $[1,5]$ rating are not comparable: one is a sum of points that can be large, another lives between 1 and 5. Normalise to $[0,1]$ (divide by the maximum) before blending, or feed each to a ranker (the model that sorts the final list) as a separate feature. And count distinct users (or cap each user's contribution), since one shopper clicking 40 times inflates a score by 40.
 
 ### Popularity as a candidate source and as a feature
 

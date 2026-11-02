@@ -12,6 +12,21 @@ Query itu adalah sistem rekomendasi tertua di dunia. Ia juga yang tetap dipertah
 - Bagaimana sedikit personalisasi, "populer di kategori yang Anda sukai", lebih dari menggandakan ndcg@20 dibanding daftar global terbaik.
 - Apa itu bias popularitas (*popularity bias*), mengapa cakupan (*coverage*) runtuh, dan apa yang dilakukan sistem produksi untuk mengatasinya.
 
+**Istilah yang akan Anda temui di bab ini** (masing-masing dijelaskan lagi di tempat ia pertama kali penting):
+
+| Istilah | Arti sederhana |
+|---|---|
+| **Baseline** | Metode paling sederhana yang masuk akal. Metode yang lebih canggih baru berarti kalau ia mengalahkannya. Bayangkan waktu seorang pelari santai di lintasan 5 km: program latihan baru baru dianggap "lebih baik" kalau Anda berhasil melampaui waktu itu. |
+| **Yardstick (tolok ukur)** | Hal yang sama dilihat dari sisi lain: *baseline* adalah penggaris tempat kita menempelkan setiap metode lain. |
+| **Query SQL** | Pertanyaan satu baris yang diajukan ke basis data, misalnya "hitung pesanan per item dan beri saya 20 teratas". |
+| **Event** | Satu aksi yang tercatat: klik, add-to-cart, atau pesanan. |
+| **Cold start** | Pengunjung baru atau item baru yang belum punya riwayat, sehingga tidak ada bahan untuk dipersonalisasi. |
+| **Fallback** | Rencana cadangan: apa yang kita tampilkan ketika metode utama tidak punya jawaban. |
+| **Sumber kandidat** | Metode murah yang mengusulkan daftar pendek item, yang kemudian diurutkan lebih teliti oleh model yang lebih berat. |
+| **Fitur** (*feature*) | Angka yang menggambarkan pengguna atau item (misalnya "jumlah klik minggu ini") yang dibaca model sebagai masukan. |
+| **Hiperparameter** | Pengaturan yang *Anda* pilih sendiri dan uji, bukan yang dipelajari komputer dari data. Lebar jendela dalam hari adalah salah satunya. |
+| **ndcg@20, recall@20, coverage@20** | Metrik Bab 2, masing-masing melihat daftar 20 item. *ndcg*: skor yang memberi ganjaran bila item yang tepat ditaruh di dekat puncak. *recall*: porsi dari apa yang benar-benar disentuh pengguna setelahnya yang ada di 20 item kita. *coverage* (cakupan): porsi seluruh katalog yang direkomendasikan ke setidaknya satu pengguna. |
+
 ## Intuisi: rak di depan toko
 
 Bayangkan toko buku di lingkungan rumah Anda. Saat Anda pertama kali masuk, pemiliknya tidak tahu apa-apa tentang Anda, lalu apa yang ia lakukan? Ia menaruh buku terlaris di meja dekat pintu. Ia tidak perlu tahu selera Anda: buku yang dibeli ratusan orang lain adalah taruhan yang cukup baik untuk orang asing. Meja itu adalah **sistem rekomendasi popularitas global** (*global popularity recommender*): satu peringkat, sama untuk semua orang.
@@ -19,7 +34,7 @@ Bayangkan toko buku di lingkungan rumah Anda. Saat Anda pertama kali masuk, pemi
 Sekarang perhatikan apa yang ditambahkan seorang pemilik toko yang cerdik seiring waktu.
 
 1. **Ia melupakan secara perlahan.** Buku yang terjual 500 eksemplar tahun lalu tetapi hanya dua minggu lalu tidak lagi ada di meja. Itulah *peluruhan waktu* (*time decay*): penjualan terbaru dihitung lebih besar daripada yang lama. Toko yang tidak pernah lupa akhirnya menghias meja depannya dengan hit musim lalu.
-2. **Ia tidak mempercayai sampel kecil.** Buku dengan skor bintang lima sempurna dari satu pengulas, sepupu sang penulis, tidak boleh mengalahkan buku dengan 4.7 bintang dari dua ribu pembaca. Itulah *shrinkage*, atau rata-rata Bayesian: ketika bukti tipis, bersandarlah pada apa yang kita ketahui tentang buku secara umum.
+2. **Ia tidak mempercayai sampel kecil.** Buku dengan skor bintang lima sempurna dari satu pengulas, sepupu sang penulis, tidak boleh mengalahkan buku dengan 4.7 bintang dari dua ribu pembaca. Itulah *shrinkage*, atau **rata-rata Bayesian**: ketika bukti tipis, kita mulai dari apa yang kita ketahui tentang buku secara umum ("tebakan awal", *prior*) dan hanya menjauh darinya secepat bukti nyata datang. Kita akan memakai angka untuk ini di Metode 4.
 3. **Ia memperhatikan siapa Anda.** Begitu Anda bilang suka memasak, ia mengantar Anda ke rak buku resep, dan *di sana* ia kembali menunjuk buku terlaris. Ia tidak memakai model canggih tentang selera Anda; ia hanya mengiriskan "apa yang Anda suka" dengan "apa yang populer". Itulah **popularitas yang dipersonalisasi** (*personalised popularity*), dan itu jembatan dari bab ini ke sisa buku.
 
 Setiap langkah itu punya bentuk numerik yang presisi. Tidak satu pun membutuhkan lebih dari `groupby` pandas. Namun, seperti yang akan kita lihat pada hasilnya, langkah ketiga saja menghasilkan skor 2.5 kali lebih tinggi daripada tabel terlaris biasa.
@@ -51,6 +66,8 @@ Marketplace mencatat banyak jenis event, tetapi hanya tiga yang merupakan sinyal
 
 Semua yang ada di bab ini membaca dari satu tabel itu. Misalkan $w_e$ adalah bobot event $e$, dan $a_e$ usianya dalam hari.
 
+Contoh kecil. Misalkan pembeli Sari mengklik sebuah kantong makanan kucing dua kali lalu memesannya sekali. Kantong itu mendapat $1 + 1 + 5 = 7$ poin darinya. Event semua pembeli menumpuk pada item dengan cara yang sama. Titik potong (*cutoff*) adalah saat kita membekukan waktu (seperti di Bab 2): hanya event sebelum titik itu yang dipakai, dan `age_days` adalah berapa hari sebelum titik potong sebuah event terjadi.
+
 ### Metode 1: Popularitas global
 
 Aturan penilaian paling sederhana adalah menjumlahkan bobot untuk setiap item di seluruh riwayat:
@@ -58,6 +75,8 @@ Aturan penilaian paling sederhana adalah menjumlahkan bobot untuk setiap item di
 $$
 \text{pop}(i) = \sum_{e \,:\, \text{item}(e)=i} w_e .
 $$
+
+Bacalah simbolnya dengan lantang: $\sum$ berarti "jumlahkan"; tulisan kecil di bawahnya menyebut angka *mana* yang dijumlahkan: bobot $w_e$ dari setiap event $e$ yang itemnya $i$. Contoh: kantong makanan kucing dengan 10 klik, 2 add-to-cart, dan 1 pesanan bernilai $10\times1 + 2\times3 + 1\times5 = 21$ poin. Casing ponsel dengan 3 pesanan bernilai $15$ poin, sehingga kantong itu berperingkat di atas casing.
 
 Urutkan menurun dan Anda punya daftar terlaris. Kelebihannya: sepele, kokoh, dan tidak butuh informasi pengguna, sehingga bekerja untuk pengunjung yang belum pernah login. Kekurangannya: ia buta terhadap waktu. Item yang enam minggu lalu menjadi hit besar dan hari ini sudah mati tetap bertengger di dekat puncak.
 
@@ -69,27 +88,33 @@ $$
 \text{pop}_W(i) = \sum_{e \,:\, \text{item}(e)=i,\; a_e < W} w_e .
 $$
 
+Dengan kata lain: *lihat hanya struk $W$ hari terakhir dan abaikan semua yang lebih lama.* Syarat $a_e < W$ adalah tes "apakah event ini lebih muda dari $W$ hari?". Contoh dengan $W = 7$: sebuah item punya klik berusia 2, 5, dan 9 hari. Dua yang pertama dihitung (2 poin), klik berusia 9 hari diabaikan.
+
 Dengan $W=7$ inilah daftar "tren minggu ini", dan persis itulah yang dihitung `candidates.item_popularity(hist, 7)`. Jendela adalah alat yang kasar: event berusia 6.9 hari dihitung penuh, event berusia 7.1 hari tidak dihitung sama sekali. Ada pula harga statistiknya. Event yang lebih sedikit berarti hitungan yang lebih berisik: jika sebuah item terjual sepuluh unit seminggu, hitungan mingguannya naik-turun cukup besar hanya karena kebetulan.
 
 ### Metode 3: Peluruhan waktu eksponensial
 
-Alih-alih tebing, kita bisa memakai lereng yang mulus. Setiap event kehilangan nilai seiring bertambahnya usia, dan pilihan yang lazim adalah peluruhan eksponensial yang dikendalikan oleh **half-life** (waktu paruh) $h$: usia ketika sebuah event bernilai separuh dari event yang masih baru.
+Alih-alih tebing, kita bisa memakai lereng yang mulus: **setiap event kehilangan nilai seiring bertambah tua, dan kehilangannya mengikuti aturan tetap.** Aturan yang kita pakai berbunyi: *setelah sejumlah hari tertentu, sebuah event bernilai tepat separuh dari sebelumnya.* Jumlah hari itu adalah **half-life** (waktu paruh) $h$. Dengan $h = 7$ hari, klik hari ini bernilai 1, klik yang sama seminggu kemudian bernilai 0.5, dua minggu kemudian 0.25, tiga minggu kemudian 0.125, dan seterusnya. Tanpa pemudaran, tumpukan klik lama bisa selamanya mengalahkan klik baru; dengan pemudaran, hit musim lalu perlahan turun dari daftar. Rumus yang melakukannya adalah
 
 $$
 d(a) = 2^{-a/h} = e^{-\lambda a}, \qquad \lambda = \frac{\ln 2}{h}.
 $$
 
-Kedua bentuk itu adalah fungsi yang sama. Yang pertama lebih mudah dinalar (setiap $h$ hari bobotnya separuh); yang kedua adalah bentuk yang disukai kalkulus. Dengan $h = 7$ hari, yaitu `HALF_LIFE_DAYS` di repositori, kita mendapat $\lambda = 0.693/7 \approx 0.099$ per hari. Popularitas terluruh (*decayed*) adalah
+Kedua bentuk itu adalah fungsi yang sama. Pada bentuk pertama, eksponen $-a/h$ sekadar menghitung *berapa kali waktu paruh telah berlalu* (usia 14 dengan $h=7$ berarti dua waktu paruh, sehingga bobotnya $\tfrac12\times\tfrac12$). Bentuk kedua memakai bilangan $e \approx 2.718$ dan logaritma natural $\ln$; itu kurva yang sama yang ditulis menurut selera kalkulus, dan boleh dilewati. Dengan $h = 7$ hari, yaitu `HALF_LIFE_DAYS` di repositori, kita mendapat $\lambda = 0.693/7 \approx 0.099$ per hari. Popularitas terluruh (*decayed*) sebuah item sederhananya adalah jumlah dari *bobot tiap event dikali faktor pemudarannya*:
 
 $$
 \text{pop}_{\text{decay}}(i) = \sum_{e \,:\, \text{item}(e)=i} w_e \cdot 2^{-a_e/h}.
 $$
 
-Mari kita periksa bahwa bentuknya sesuai klaim kita. Pada usia 0 bobotnya 1. Pada usia 7 bobotnya $2^{-1} = 0.5$. Pada 14 menjadi $2^{-2} = 0.25$, pada 21 menjadi $0.125$. Setelah sebulan sekitar 5%, dan event dari awal riwayat nyaris tidak bernilai. Skrip mencetak angka-angka ini, dan grafik memplotnya.
+Mari kita periksa bahwa bentuknya sesuai klaim kita. Pada usia 0 bobotnya 1. Pada usia 7 bobotnya $2^{-1} = 0.5$. Pada 14 menjadi $2^{-2} = 0.25$, pada 21 menjadi $0.125$. Setelah sebulan sekitar 5%, dan event dari awal riwayat nyaris tidak bernilai. Skrip mencetak angka-angka ini, dan grafik memplotnya. Pada grafik, garis turun cepat di awal lalu mendatar: setiap minggu menghapus separuh dari *sisa yang ada*, bukan jumlah yang tetap.
 
 ![Peluruhan eksponensial dengan half-life 7 hari: bobot separuh setiap tujuh hari, dari 1 pada usia nol menjadi 0.5, 0.25, dan 0.125 pada usia 7, 14, dan 21.](../assets/charts/ch03-decay-curve.png)
 
-Peluruhan eksponensial menjadi bawaan produksi karena tiga alasan. Ia **tak bermemori** (*memoryless*): nilai relatif hanya bergantung pada selang antar event, sehingga penilaian ulang esok hari tidak mengubah peringkat. Ia **bisa diperbarui secara inkremental**: simpan satu angka $S$ per item dan atur $S \leftarrow S\cdot 2^{-(t-t_{\text{last}})/h} + w$ pada setiap event, satu perkalian dan satu penjumlahan. Dan ia punya **satu kenop yang intuitif**: agar sebuah event bernilai 10% setelah 30 hari, selesaikan $2^{-30/h}=0.1$, sehingga $h = 30\ln 2/\ln 10 \approx 9.0$ hari.
+Peluruhan eksponensial menjadi bawaan produksi karena tiga alasan.
+
+1. **Peringkat tidak terbalik hanya karena waktu berlalu.** Esok hari, setiap event berusia satu hari lebih tua, sehingga setiap skor dikalikan faktor yang *sama* ($2^{-1/7} \approx 0.906$). Semua item mengecil bersama dan urutannya tetap. (Nama teknisnya *memoryless*, tak bermemori: nilai sebuah event relatif terhadap event lain hanya bergantung pada selang antara keduanya.)
+2. **Pembaruannya murah.** Anda tidak perlu membaca ulang seluruh riwayat. Simpan satu angka berjalan $S$ per item. Saat event baru berbobot $w$ tiba, pudarkan dulu total lama sesuai waktu sejak event terakhir, lalu tambahkan: $S \leftarrow S\cdot 2^{-(t-t_{\text{last}})/h} + w$. Itu satu perkalian dan satu penjumlahan. (Ini disebut pembaruan *inkremental*.) Misalnya, jika $S = 2.55$ hari ini dan besok tidak terjadi apa-apa, maka besok $S = 2.55 \times 0.906 \approx 2.31$.
+3. **Ia punya satu kenop yang intuitif.** Anda mengatur seberapa cepat minat memudar dengan memilih $h$. Agar sebuah event bernilai 10% setelah 30 hari, selesaikan $2^{-30/h}=0.1$. Karena $2^{3.32} \approx 10$, kita butuh $30/h = 3.32$, sehingga $h = 30\ln 2/\ln 10 \approx 9.0$ hari.
 
 ### Contoh hitungan kecil
 
@@ -105,9 +130,9 @@ Metode sepanjang waktu memilih B karena ia tidak pernah lupa. Jendela 7 hari mem
 
 ### Metode 4: Rata-rata Bayesian (tidak mempercayai sampel kecil)
 
-Sejauh ini kita meranking berdasarkan *permintaan*. Sinyal populer lainnya adalah *kualitas*: rata-rata rating bintang. Tetapi rata-rata bisa berbohong saat sampelnya kecil. Produk dengan satu rating bintang 5 punya rata-rata 5.0, lebih tinggi daripada produk terlaris dengan 4.8 dari ribuan pembeli. Kita menginginkan skor yang dimulai dari rata-rata *global* ketika tidak ada bukti, lalu perlahan bergeser ke rata-rata item itu sendiri seiring bukti menumpuk.
+Sejauh ini kita meranking berdasarkan *permintaan* (seberapa sering orang bertindak pada sebuah item). Sinyal populer lainnya adalah *kualitas*: rata-rata rating bintang. Tetapi rata-rata bisa berbohong bila bertumpu pada sedikit rating. Bayangkan seorang pemain bola yang mencetak gol di satu-satunya pertandingannya: "1.0 gol per pertandingan" tampak lebih baik daripada 0.8 milik striker bintang dalam 300 pertandingan, tetapi tak ada yang percaya. Juri yang adil akan menganggap pemain baru itu seolah sudah bermain sejumlah pertandingan tambahan dengan rata-rata liga. Itulah persis triknya di sini. Produk dengan satu rating bintang 5 punya rata-rata 5.0, lebih tinggi daripada produk terlaris dengan 4.8 dari ribuan pembeli. Kita menginginkan skor yang dimulai dari rata-rata *global* ketika tidak ada bukti, lalu perlahan bergeser ke rata-rata item itu sendiri seiring bukti menumpuk.
 
-Misalkan $R$ adalah rating rata-rata sebuah item, $v$ jumlah ratingnya, $C$ rating rata-rata semua item, dan $m$ **kekuatan prior** (*prior strength*): berapa banyak rating "bukti khayalan" pada rata-rata global yang kita tambahkan. Rata-rata Bayesian adalah
+Misalkan $R$ adalah rating rata-rata sebuah item, $v$ jumlah ratingnya, $C$ rating rata-rata semua item ("tebakan awal": apa yang kita harapkan untuk item yang tidak kita ketahui apa-apa), dan $m$ **kekuatan prior** (*prior strength*): berapa banyak rating "bukti khayalan" pada rata-rata global yang kita tambahkan. ("Prior" hanya berarti "apa yang kita yakini sebelum melihat data item ini"; "Bayesian" berarti kita mencampur keyakinan itu dengan bukti.) Rata-rata Bayesian, ditulis WR untuk *weighted rating* (rating berbobot), adalah
 
 $$
 \text{WR} = \frac{v}{v+m}\, R + \frac{m}{v+m}\, C .
@@ -129,7 +154,9 @@ $$
 \text{WR} = \tfrac{20}{120}\cdot 4.8 + \tfrac{100}{120}\cdot 4.0 = 0.8 + 3.33 = 4.13 .
 $$
 
-Item itu tampak bagus (4.8), tetapi dua puluh rating belum banyak, sehingga estimasinya tetap dekat dengan prior. Aritmetika yang sama berlaku pada tingkat konversi: 3 klik dari 10 impresi (30% mentah) dengan CTR global 5% dan kekuatan 50 di-*smooth* menjadi $(3+2.5)/60 = 9.2\%$, sedangkan 50 klik dari 1,000 impresi tetap di 5.0%. Sampel kecil dikerutkan keras; sampel besar nyaris tak bergeser.
+Telusuri. Bobot untuk rata-rata item itu sendiri adalah $20/120 \approx 0.17$ dan bobot untuk rata-rata global adalah $100/120 \approx 0.83$. Jadi 4.13 terdiri dari 17% "4.8 milik item ini" dan 83% "4.0 milik item biasa".
+
+Item itu tampak bagus (4.8), tetapi dua puluh rating belum banyak, sehingga estimasinya tetap dekat dengan prior. Aritmetika yang sama berlaku pada rasio bergaya konversi. Di sini *klik* adalah pengguna mengklik sebuah item, *impresi* adalah satu kali item itu ditampilkan, dan CTR (*click-through rate*) adalah klik ÷ impresi. Ambil 3 klik dari 10 impresi (30% mentah) dengan CTR global 5% dan kekuatan 50: hasilnya di-*smooth* menjadi $(3+2.5)/60 = 9.2\%$, sedangkan 50 klik dari 1,000 impresi tetap di 5.0%. Sampel kecil dikerutkan keras; sampel besar nyaris tak bergeser.
 
 ::: fact
 **"Top 250" adalah rata-rata Bayesian.** IMDb secara terbuka mendokumentasikan rumus yang dipakainya untuk meranking Top 250 film: weighted rating = (v ÷ (v+m)) × R + (m ÷ (v+m)) × C, dengan R adalah rating rata-rata judul tersebut, v jumlah ratingnya, m jumlah rating minimum agar dapat masuk daftar (saat ini 25,000), dan C rating rata-rata di seluruh judul. IMDb sendiri menyebutnya "a true Bayesian estimate". Itu persis rumus di bagian ini.
@@ -139,14 +166,16 @@ Sumber: IMDb, IMDb Help Center, 2026
 
 ### Metode 5: Populer di kategori yang *Anda* sukai
 
-Empat metode pertama mengembalikan *daftar yang sama untuk setiap pengguna*. Yang terakhir menambahkan dosis personalisasi sekecil yang bisa dibayangkan. Ia memakai dua bahan yang sudah dihitung repositori.
+Empat metode pertama mengembalikan *daftar yang sama untuk setiap pengguna*. Yang terakhir menambahkan dosis **personalisasi** (menampilkan hal berbeda untuk orang berbeda) sekecil yang bisa dibayangkan. Gagasannya dalam satu kalimat: *ambil produk terlaris, tetapi hanya dari rak yang sering dikunjungi pengguna ini.* Ia memakai dua bahan yang sudah dihitung repositori.
 
-1. **Afinitas kategori** (*category affinity*) $s_{u,c}$: pangsa aktivitas (terluruh) pengguna $u$, yaitu klik, keranjang, pesanan *dan* pencarian, yang jatuh pada kategori $c$. Jumlahnya 1 atas semua kategori untuk setiap pengguna, dan dihasilkan oleh `candidates.category_affinity`.
-2. **Popularitas ternormalisasi dalam kategori**: untuk item $i$ di kategori $c(i)$,
+1. **Afinitas kategori** (*category affinity*) $s_{u,c}$: seberapa besar pengguna $u$ menyukai kategori $c$, diukur sebagai pangsa aktivitas (terluruh) mereka (klik, keranjang, pesanan *dan* pencarian) yang jatuh pada $c$. Untuk setiap pengguna, pangsa-pangsa itu berjumlah 1 (seperti diagram lingkaran minat mereka). Ia dihasilkan oleh `candidates.category_affinity`.
+2. **Popularitas ternormalisasi dalam kategori** ("ternormalisasi" = diskalakan ulang agar item terbaik bernilai 1): untuk item $i$ di kategori $c(i)$,
 
 $$
 \tilde p(i) = \frac{\text{pop}_7(i)}{\max_{j \in c(i)} \text{pop}_7(j)} \in [0,1].
 $$
+
+Bacalah: poin mingguan item ini dibagi poin mingguan item *terbaik* di kategori yang sama ($\max$ = nilai terbesar). Hasilnya berada di antara 0 dan 1 (notasi $\in [0,1]$).
 
 Item terbaik di setiap kategori mendapat 1, sisanya adalah pecahan darinya. Skor akhir mengalikan keduanya:
 
@@ -154,7 +183,9 @@ $$
 \text{score}(u, i) = s_{u,\,c(i)} \cdot \tilde p(i).
 $$
 
-Mengapa dinormalisasi dalam kategori? Tanpa itu, kategori besar seperti Camilan akan menenggelamkan yang lain. Dengan normalisasi, setiap kategori punya "langit-langit" yang sama, dan afinitas pengguna menentukan *bintang dari kategori mana* yang muncul. Suku tambahan kecil (sepersejuta dari popularitas global) memecah seri dan memberi pengguna *tanpa* riwayat, yang afinitasnya nol semua, daftar `pop_7d` biasa sebagai *fallback*.
+Mengapa dinormalisasi dalam kategori? Tanpa itu, kategori besar seperti Camilan akan menenggelamkan yang lain: bayangkan item terbaiknya bernilai 900 poin sedangkan item makanan kucing terbaik hanya 90. Setelah dibagi, keduanya mendapat 1. Setiap kategori lalu punya "langit-langit" yang sama, dan afinitas pengguna menentukan *bintang dari kategori mana* yang muncul.
+
+Ditambahkan juga suku tambahan kecil: sepersejuta dari popularitas global. Ia hanya berperan pada *seri*, yaitu ketika dua item akan mendapat skor yang persis sama. Pengguna *tanpa* riwayat punya afinitas nol semua, sehingga setiap skor akan 0; suku tambahan itu membiarkan mereka dengan peringkat `pop_7d` biasa, yang menjadi jaring pengaman.
 
 Contoh hitungan: Sari menghabiskan 60% aktivitasnya pada Makanan Kucing, 30% pada Mainan Anjing, dan 10% pada Perawatan Kulit. Item makanan kucing terbaik bernilai $0.6\times1=0.6$, runner-up dengan 80% popularitasnya bernilai $0.48$, mainan anjing terbaik $0.3$, item perawatan kulit terbaik hanya $0.1$. Feed-nya sebagian besar berisi item hewan peliharaan, diurutkan menurut popularitas dalam setiap rak.
 
@@ -163,6 +194,8 @@ Contoh hitungan: Sari menghabiskan 60% aktivitasnya pada Makanan Kucing, 30% pad
 
 Sumber: Abdollahpouri et al., RMSE Workshop at RecSys, 2019
 :::
+
+Dengan kata sederhana: ketika sebuah sistem dilatih agar benar secara rata-rata, ia belajar bahwa item populer adalah taruhan teraman, sehingga ia terus merekomendasikannya, bahkan kepada orang yang sebenarnya akan menyukai sesuatu yang kurang dikenal.
 
 ## Penelusuran kode
 
@@ -179,6 +212,8 @@ symbol: History.interactions
 
 Ia hanya menyimpan jenis event yang ada di `EVENT_WEIGHT` dan menambahkan kolom bobot `w`. Kolom `age_days` ditempelkan saat `History` dibangun. Semua yang ada di bawah ini adalah reduksi yang berbeda atas baris-baris ini.
 
+(Kolom angka di `pandas` disebut *Series*; `DataFrame` adalah tabel yang terdiri dari kolom-kolom seperti itu. `History.interactions()` mengembalikan DataFrame dengan satu baris per event.)
+
 ### Peluruhan waktu dalam satu baris
 
 ```include
@@ -187,6 +222,8 @@ symbol: _decay
 ```
 
 Itulah seluruh rumus *half-life*: `0.5 ** (age_days / HALF_LIFE_DAYS)`. Karena diterapkan pada seluruh Series pandas, ia bekerja pada jutaan event sekaligus tanpa *loop* Python. Konstanta `HALF_LIFE_DAYS = 7.0` dideklarasikan di bagian atas `candidates.py`. Perhatikan bahwa fungsi ini privat (diawali garis bawah) namun dipakai beberapa *retriever*: `recent` mengalikan bobot setiap interaksi dengannya, dan `category_affinity` memakainya untuk klik maupun pencarian. Kurva yang sama dengan demikian mengungkapkan "berapa lama minat bertahan" di seluruh tahap pertama.
+
+Dengan kata sederhana: "kalikan satu per dua untuk setiap tujuh hari usia". Karena diterapkan pada seluruh kolom sekaligus ("tervektorisasi"), pandas menjalankan *loop*-nya di kode terkompilasi yang cepat.
 
 ### Popularitas berjendela keras
 
@@ -197,6 +234,8 @@ symbol: item_popularity
 
 Tiga operasi: ambil interaksi positif, simpan baris dengan `age_days < window_days`, jumlahkan bobot per item. Perhatikan `<` yang ketat: event berusia tepat `window_days` *dikecualikan*. Fungsi ini mengembalikan `pd.Series` berindeks `item_id`, dan item tanpa event di dalam jendela sama sekali tidak ada, sehingga pemanggil harus melakukan `fillna(0)`. *Retriever* "trending" (jendela 3 hari), *retriever* populer-per-kategori (7 hari), dan `similar_items` semuanya memanggilnya, sehingga seluruh sistem berbagi *satu* definisi "populer" dan hanya jendelanya yang berubah.
 
+"Series berindeks `item_id`" berarti kolom angka yang setiap angkanya diberi label item-nya. `fillna(0)` mengganti "hilang" dengan 0, sehingga item tanpa event di dalam jendela bernilai 0, bukan absen.
+
 ### Smoothing
 
 ```include
@@ -205,6 +244,8 @@ symbol: _smoothed
 ```
 
 Lagi-lagi satu baris, dan lagi-lagi persis rumusnya: `(num + prior * strength) / (den + strength)`. Petakan rata-rata Bayesian ke dalamnya dengan menetapkan `num` sebagai total bintang, `den` sebagai jumlah rating, `prior` sebagai $C$, dan `strength` sebagai $m$. Di tempat lain dalam `features.py` fungsi ini dipanggil dengan kekuatan yang berbeda: 20 pseudo-impresi untuk CTR pengguna, 50 untuk CTR item, 20 untuk konversi, dan 10 untuk tingkat retur. Nilai-nilai ini ditentukan dengan perasaan, bukan dipelajari; semakin kecil penyebut tipikal sebuah statistik, semakin kecil kekuatan yang bisa Anda tanggung.
+
+"Pseudo-impresi" adalah tampilan tambahan khayalan yang ditambahkan ke data, gagasan yang sama dengan rating tambahan khayalan di Metode 4. "Ditentukan dengan perasaan" berarti seseorang memilih angkanya setelah mencoba beberapa, bukan dipelajari komputer.
 
 ### Skrip eksperimen
 
@@ -221,6 +262,8 @@ symbol: recs_from_scores
 ```
 
 Urutan stabil (*stable sort*) itu penting: banyak item seri di nol, dan pengurutan tak stabil akan membuat hasil antar-run tidak dapat direproduksi.
+
+"Stabil" berarti ketika dua item punya skor yang sama, mereka tetap pada urutan semula. Tanpanya, item yang seri bisa teracak berbeda setiap kali dijalankan, dan Anda tidak bisa mengulang hasil Anda.
 
 Sekarang *scorer*-nya sendiri. Tiga yang pertama hampir satu baris (berada di tingkat modul dalam skrip):
 
@@ -246,6 +289,8 @@ region: ch03_personal
 ```
 
 `A` punya satu baris per pengguna evaluasi dan satu kolom per kategori; `P` punya satu baris per kategori dan satu kolom per item, dan bernilai bukan nol hanya di tempat item itu termasuk kategori pada baris tersebut. Hasil kali matriks dengan demikian menghasilkan, untuk setiap pengguna dan item, persis $s_{u,c(i)}\,\tilde p(i)$. Suku di ujung adalah pemecah seri yang dijelaskan sebelumnya.
+
+Secara konkret, jika baris `A` milik Sari berisi 0.6 untuk Makanan Kucing, 0.3 untuk Mainan Anjing, dan 0.1 untuk Perawatan Kulit, maka mengalikannya dengan `P` memberi setiap item bobot kategorinya dikali popularitas ternormalisasinya, persis seperti contoh hitungan di atas. Satu perkalian matriks melakukannya untuk setiap pengguna dan item sekaligus.
 
 ## Jalankan
 
@@ -291,6 +336,8 @@ Kurva peluruhan pada Gambar 3.2 mengonfirmasi aritmetikanya. Bobot yang tercetak
 
 Bacalah tabel utama baris demi baris. Kita berfokus pada ndcg@20 (satu angka yang memberi ganjaran bagi penempatan hit di dekat puncak) dan recall@20 (berapa banyak interaksi *held-out* pengguna yang kita temukan dalam 20 slot).
 
+Pengingat cara membaca angka-angka ini: keduanya berkisar 0 sampai 1 dan makin tinggi makin baik. Nilai absolutnya tampak kecil karena kita hanya punya 20 slot dan katalognya besar, sehingga yang penting adalah *rasio* antar metode.
+
 **Acak adalah lantainya.** `random` mencapai ndcg@20 sebesar 0.0035 dan recall@20 sebesar 0.0090. Tidak ada yang di bab ini boleh berskor lebih rendah, dan apa pun yang begitu pasti rusak. Cakupannya 1.0000: setiap item direkomendasikan kepada seseorang. Kita akan kembali pada keanehan bahwa metode *terburuk* punya cakupan *terbaik*.
 
 **Popularitas global sudah sekitar empat belas hingga lima belas kali lebih baik daripada acak dalam ndcg@20.** `pop_all_time` berskor ndcg@20 0.0527 dan recall@20 0.0914, `pop_7d` berskor 0.0475 dan 0.0786, dan `pop_decay` berada di antaranya dengan 0.0491 dan 0.0813. Selisih antara acak dan metode masuk akal yang paling murah jauh lebih besar daripada selisih antar metode masuk akal itu sendiri. Sebagian besar nilai "mudah" yang dapat dicapai terletak pada sekadar mengetahui item mana yang diinginkan orang.
@@ -298,6 +345,8 @@ Bacalah tabel utama baris demi baris. Kita berfokus pada ndcg@20 (satu angka yan
 **Sepanjang waktu sedikit mengalahkan jendela 7 hari, kebalikan dari yang disarankan intuisi.** Banyak praktisi mengira "trending" akan menang. Di sini tidak, dan alasannya adalah sifat *data ini*: dalam simulator, setiap item punya kualitas tersembunyi yang tetap, sehingga kualitas tersembunyi sebuah item tidak berubah dan item yang populer sebulan lalu masih populer. Di bawah popularitas yang stabil, riwayat lebih panjang berarti lebih sedikit derau, dan hitungan 53 hari adalah estimasi yang lebih baik atas angka dasar yang sama daripada hitungan satu minggu. Varian peluruhan berada di antara keduanya karena alasan yang sama: jendela efektifnya lebih panjang dari tujuh hari namun tetap memberi bobot lebih kecil pada yang lama.
 
 Pada *cut-off* yang lebih dalam, daftar terluruh jauh lebih dekat dengan daftar sepanjang waktu (recall@50 adalah 0.1557 berbanding 0.1575, sementara jendela keras turun ke 0.1335): lereng yang mulus mempertahankan ekor panjang bukti yang dibuang oleh tebing.
+
+"Ekor panjang bukti" berarti banyak event yang lebih lama. Jendela keras membuangnya; peluruhan menyimpannya tetapi memberinya bobot kecil. "Derau" (*noise*) berarti naik-turun acak pada sebuah hitungan yang berasal dari kebetulan, bukan dari popularitas sungguhan.
 
 ::: warning
 Jangan menganggap "sepanjang waktu mengalahkan 7 hari" sebagai hukum alam. Itu hanya mengatakan bahwa katalog *simulasi* memiliki popularitas yang stasioner. Di marketplace sungguhan, *flash sale*, produk viral, dan kategori musiman (Ramadan, 9.9, 11.11) membuat popularitas bergeser, dan daftar berjendela atau terluruh biasanya menang. Pelajarannya: **ukur pada data Anda sendiri**, dan perlakukan jendela atau half-life sebagai hiperparameter yang disetel pada minggu validasi.
@@ -324,18 +373,18 @@ Tabel memperlihatkannya. Ketiga metode global semuanya punya coverage@20 sebesar
 Sistem produksi menanganinya berlapis-lapis; tidak ada yang menjadi tugas *baseline*, tetapi semuanya dibangun di atasnya:
 
 - **Personalisasi** (sisa buku ini) mengurangi dominasi satu daftar global.
-- **Eksplorasi**: sisihkan beberapa slot untuk item dengan data sedikit, dan tampilkan cukup sering agar bisa diukur. Bab 11 memperkenalkan ε-greedy dan Thompson sampling.
-- **Koreksi bias posisi** agar "diklik" tidak keliru dianggap "relevan" padahal item itu hanya ditaruh di posisi 1 (Bab 12).
-- **Re-ranking yang terkalibrasi atau didiversifikasi** seperti MMR, agar 20 teratas bukan dua puluh item yang nyaris kembar (Bab 11).
+- **Eksplorasi**: sisihkan beberapa slot untuk item dengan data sedikit, dan tampilkan cukup sering agar bisa diukur seberapa bagus mereka. Bab 11 memperkenalkan ε-greedy (dengan peluang kecil ε, tampilkan item acak atau yang kurang dikenal alih-alih yang terbaik saat ini) dan Thompson sampling (tampilkan setiap item sebanding dengan peluangnya menjadi yang terbaik).
+- **Koreksi bias posisi** agar "diklik" tidak keliru dianggap "relevan" padahal item itu hanya ditaruh di posisi 1, tempat orang paling sering mengklik hanya karena ia di atas (Bab 12).
+- **Re-ranking yang terkalibrasi atau didiversifikasi** seperti MMR (Maximal Marginal Relevance: susun daftar selangkah demi selangkah, memilih item yang relevan tetapi tidak terlalu mirip dengan yang sudah dipilih), agar 20 teratas bukan dua puluh item yang nyaris kembar (Bab 11).
 - **Normalisasi terhadap eksposur**: pakai *click-through rate* dengan *smoothing* alih-alih hitungan klik mentah, sehingga item diberi ganjaran atas *konversi per tampilan*, bukan atas seberapa sering ia ditempatkan di halaman. Di sinilah `_smoothed` muncul kembali.
 
 ### Memilih jendela dan half-life
 
-Baik $W$ maupun $h$ adalah hiperparameter. Terlalu pendek mengejar derau (satu *flash sale* sejam menentukan daftar); terlalu panjang menyajikan berita kemarin. Fesyen, elektronik, dan makanan bergerak dengan kecepatan berbeda, sehingga sebagian marketplace memakai satu half-life per kategori tingkat atas. Cobalah tiga nilai (misalnya 3, 7, 14 hari) pada minggu *held-out*, seperti yang diminta latihan praktik.
+Baik $W$ (lebar jendela) maupun $h$ (half-life) adalah hiperparameter: pengaturan yang kita pilih sendiri dan uji pada minggu *held-out*, yaitu seminggu data yang tidak dipakai untuk membangun daftar. Terlalu pendek mengejar derau (satu *flash sale* sejam menentukan daftar); terlalu panjang menyajikan berita kemarin. Fesyen, elektronik, dan makanan bergerak dengan kecepatan berbeda, sehingga sebagian marketplace memakai satu half-life per kategori tingkat atas. Cobalah tiga nilai (misalnya 3, 7, 14 hari) pada minggu *held-out*, seperti yang diminta latihan praktik.
 
 ### Jangan campur skala, hitung pengguna
 
-Skala `pop_7d`, `pop_decay`, dan rating $[1,5]$ tidak sebanding: normalisasikan ke $[0,1]$ sebelum dicampur, atau umpankan masing-masing ke *ranker* sebagai fitur terpisah. Dan hitunglah pengguna yang berbeda (atau batasi kontribusi tiap pengguna), karena satu pembeli yang mengklik 40 kali menggelembungkan skor sebesar 40.
+Skala `pop_7d`, `pop_decay`, dan rating $[1,5]$ tidak sebanding: yang satu adalah jumlah poin yang bisa besar, yang lain berada di antara 1 dan 5. Normalisasikan ke $[0,1]$ (bagi dengan nilai maksimum) sebelum dicampur, atau umpankan masing-masing ke *ranker* (model yang mengurutkan daftar akhir) sebagai fitur terpisah. Dan hitunglah pengguna yang berbeda (atau batasi kontribusi tiap pengguna), karena satu pembeli yang mengklik 40 kali menggelembungkan skor sebesar 40.
 
 ### Popularitas sebagai sumber kandidat dan sebagai fitur
 
