@@ -199,11 +199,11 @@ lines: 34-38
 
 ### Tabel posisi
 
-![CTR menurut posisi tampil pada seluruh impresi sebelum cutoff. Posisi 0 berkonversi 23,8% dan posisi 11 sebesar 1,6%.](../assets/charts/ch12-position-ctr.png)
+![CTR menurut posisi tampil pada seluruh impresi sebelum cutoff. Posisi 0 berkonversi 23.8% dan posisi 11 sebesar 1.6%.](../assets/charts/ch12-position-ctr.png)
 
 *Gambar: click-through rate menurut posisi tampil. Setiap posisi memiliki jumlah impresi yang persis sama, sehingga batang-batangnya dapat dibandingkan langsung.*
 
-Masing-masing dari dua belas posisi memiliki tepat 16.770 impresi, yang berarti penyebutnya sama dan tinggi batang adalah laju yang jujur. Posisi 0 memiliki CTR 0.2385 dan posisi 11 memiliki 0.0156, rasio 15.3 kali. Penurunannya tidak mulus. Dari posisi 0 ke posisi 1, CTR turun dari 0.2385 ke 0.1734; posisi 1 sampai 5 menurun perlahan dari 0.1734 ke 0.1248; lalu antara posisi 5 (0.1248) dan posisi 6 (0.0673) nilainya hampir separuh dalam satu langkah. Tebing itu konsisten dengan halaman yang enam item pertamanya terlihat tanpa menggulir. Joachims et al. mengamati patahan serupa di batas lipatan layar (*fold*) pada data eye-tracking mereka. Posisi 6 sampai 10 kemudian menurun perlahan, dan posisi 11 turun tajam lagi.
+Masing-masing dari dua belas posisi memiliki tepat 16,770 impresi, yang berarti penyebutnya sama dan tinggi batang adalah laju yang jujur. Posisi 0 memiliki CTR 0.2385 dan posisi 11 memiliki 0.0156, rasio 15.3 kali. Penurunannya tidak mulus. Dari posisi 0 ke posisi 1, CTR turun dari 0.2385 ke 0.1734; posisi 1 sampai 5 menurun perlahan dari 0.1734 ke 0.1248; lalu antara posisi 5 (0.1248) dan posisi 6 (0.0673) nilainya hampir separuh dalam satu langkah. Tebing itu konsisten dengan halaman yang enam item pertamanya terlihat tanpa menggulir. Joachims et al. mengamati patahan serupa di batas lipatan layar (*fold*) pada data eye-tracking mereka. Posisi 6 sampai 10 kemudian menurun perlahan, dan posisi 11 turun tajam lagi.
 
 ### Personalisasi membuahkan hasil seiring riwayat bertambah
 
