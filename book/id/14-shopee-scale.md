@@ -28,6 +28,17 @@ Itulah seluruh perbedaan antara repositori kita dan marketplace produksi. Gagasa
 2. Mode kegagalan baru apa yang dibawanya?
 3. File mana di repositori ini yang akan digantikannya?
 
+### Seberapa besar "besar"? Skala dalam angka sehari-hari
+
+Tiga kata muncul sepanjang bab ini, jadi kita tetapkan dulu artinya.
+
+- **Latensi** (*latency*) adalah berapa lama satu permintaan berlangsung, dari saat Anda mengetuk layar sampai halaman muncul. Ia seperti waktu tunggu di warung makan: dari memesan sampai makanan di tangan.
+- ***Throughput*** adalah berapa banyak permintaan yang selesai dilayani sistem per detik. Ia seperti berapa banyak pelanggan yang dilayani warung yang sama dalam satu jam.
+- ***Offline* vs *online*.** *Offline* berarti bekerja pada catatan yang sudah tersimpan: melatih model, atau menilai log minggu lalu. *Online* berarti melayani pembeli sungguhan saat ini juga. Model yang sama bisa tampak bagus secara offline dan buruk secara online, dan sebagian besar bab ini membahas alasannya.
+
+Sekarang sedikit hitungan untuk merasakan besarnya masalah. Di Bab 13 prototipe kita butuh sekitar 840 milidetik, atau 0.84 detik, untuk menjawab satu permintaan. Jadi satu pekerja (*worker*) menyelesaikan sekitar $1 / 0.84 \approx 1.2$ permintaan per detik. Bayangkan, sekadar sebagai ilustrasi, 10,000 permintaan masuk setiap detik pada siang 9.9. Dengan 0.84 detik per permintaan, itu berarti $10{,}000 \times 0.84 = 8{,}400$ pekerja sibuk bersamaan, dan masing-masing menyimpan salinan datanya sendiri. Tidak ada tim yang mau menjalankan itu. Jadi sistem besar harus melakukan dua hal sekaligus: membuat setiap permintaan jauh lebih *cepat*, dan *berbagi* pekerjaan antarpermintaan (menghitung sesuatu sekali, memakainya untuk ribuan pembeli). Setiap komponen dalam bab ini adalah salah satu dari dua langkah itu, atau cara agar tetap benar saat melakukannya.
+
+
 ## Algoritma: pipeline yang sama, diperluas skalanya
 
 Sebelum masuk ke rincian, berikut gambaran utuhnya. Pipeline multi-tahap dari Bab 8 (ambil, peringkatkan, peringkatkan ulang) tidak berubah. Yang berubah adalah setiap panah dalam diagram menjadi layanan jaringan dengan latensi, kapasitas, dan pemilik masing-masing.
@@ -63,54 +74,95 @@ flowchart LR
 
 Baca diagram dari kiri ke kanan. Perilaku mengalir dari aplikasi ke antrean pesan. Dari sana ada dua jalur. Jalur cepat (Flink ke *online feature store*) menjaga fitur tetap segar hingga hitungan detik. Jalur lambat (*data lake* ke job pelatihan) menghasilkan model dan indeks ANN setiap beberapa jam atau hari. *Serving* membaca dari keduanya: model dan indeks terbaru dari jalur lambat, fitur pengguna terbaru dari jalur cepat. Dan yang krusial, *serving* menulis balik *exposure log*, yaitu apa yang ditampilkannya, sehingga pelatihan berikutnya tahu apa yang benar-benar dilihat pengguna.
 
+Setiap kotak dalam diagram punya arti sehari-hari. Simpan tabel ini di dekat Anda; bagian-bagian di bawah menjelaskan setiap barisnya secara rinci.
+
+| Kotak | Dalam bahasa sederhana | Yang paling mirip di repositori ini |
+|---|---|---|
+| Kafka (log *event*) | Buku catatan bersama tempat *event* hanya ditambahkan di bagian bawah, dan banyak pembaca masing-masing menyimpan pembatas bukunya sendiri | Tabel Postgres `events` |
+| Flink (pemroses aliran) | Pekerja yang membaca buku catatan tanpa henti dan menjaga hitungan berjalan | `db.Store.refresh` |
+| *Online feature store* | Papan pencarian cepat yang menyimpan angka *terkini* setiap pembeli dan item | Belum ada: fitur dihitung ulang pada setiap permintaan |
+| *Data lake* | Arsip murah berukuran raksasa untuk setiap *event* lama, disimpan sebagai file | Tabel `events`, dibaca secara massal |
+| *Model registry* | Rak berisi versi model bernomor, agar kita tahu mana yang sedang live | Panel model pada `/how-it-works` |
+| Indeks ANN | Rak pencarian cepat untuk vektor item guna menemukan item serupa | Indeks pada Bab 7 |
+| *Exposure log* | Kuitansi tentang persis apa yang kita tampilkan ke tiap pembeli, beserta skor yang dipakai | Belum ada (butir daftar periksa 2) |
+
 Di prototipe, lingkaran yang sama ada tetapi diciutkan menjadi satu mesin. `useTracker.ts` adalah klien, rute Rust `POST /api/events` adalah *edge gateway*, tabel Postgres `events` adalah Kafka sekaligus *data lake*, `db.Store.refresh` adalah konsumen aliran, `pipeline.train_and_evaluate` adalah job pelatihan, dan RPC `Recommend` adalah lapisan *serving*. Ketika sebuah pertanyaan dimulai dengan "bagaimana kita menskalakan ini?", petakan dulu pertanyaan itu ke daftar ini.
 
 ### Log streaming dan fitur waktu nyata
 
-Di prototipe, Rust menyisipkan satu baris per *event* ke Postgres, dan layanan Python melakukan *polling* untuk baris yang lebih baru dari id terakhir yang dilihatnya. Ini sederhana dan benar, dan berfungsi untuk beberapa ratus ribu baris. Pada skala besar, ia rusak dengan tiga cara:
+Ada dua cara menjaga angka seperti "berapa kali pembeli Sari mengklik makanan kucing dalam 30 hari terakhir" tetap mutakhir. Pemrosesan **batch** menghitungnya ulang dari nol sesuai jadwal, seperti pemilik toko yang menghitung isi laci kasir sekali, setelah tutup. **Streaming** memperbaruinya begitu setiap *event* tiba, seperti total berjalan di kasir yang berubah setiap ada penjualan. *Batch* lebih sederhana. *Streaming* lebih segar.
+
+Misalkan Sari mengklik sekantong makanan kucing pada 12:00:05. Dengan job *batch* malam hari, pemeringkat masih mengira ia belum pernah melihat makanan kucing sampai besok. Dengan *streaming*, angkanya berubah dalam hitungan detik, sehingga muat ulang halaman berikutnya sudah mencerminkannya. Pada 9.9, selisih itu adalah beda antara merekomendasikan penanak nasi kepada orang yang sedang memburunya sekarang dan menampilkan sepatu kemarin.
+
+Di prototipe, Rust menyisipkan satu baris per *event* ke Postgres, dan layanan Python melakukan *polling* (bertanya berulang-ulang) untuk baris yang lebih baru dari id terakhir yang dilihatnya. Ini sederhana dan benar, dan berfungsi untuk beberapa ratus ribu baris. Pada skala besar, ia rusak dengan tiga cara:
 
 - **Throughput penulisan.** Satu primary Postgres tidak akan sanggup menyerap jutaan *insert* per detik, dan penulisan *event* bersaing dengan pesanan dan keranjang.
 - **Fan-out.** *Event* yang sama dibutuhkan banyak konsumen: pipeline fitur, sistem iklan, deteksi fraud, *data warehouse* analitik. Melakukan *polling* pada tabel menjadikan setiap konsumen pembaca database produksi.
-- **Replay.** Ketika ditemukan bug pada definisi fitur, Anda perlu memproses ulang *event* bulan lalu. Tabel yang sekaligus menjadi sistem pencatatan utama (*system of record*) adalah tempat yang buruk untuk itu.
+- **Replay.** Ketika ditemukan bug pada definisi fitur, Anda perlu memproses ulang *event* bulan lalu. Tabel yang sekaligus menjadi sistem pencatatan utama (*system of record*, satu-satunya salinan data yang sah) adalah tempat yang buruk untuk itu.
 
-Jawaban standarnya adalah *message broker* berbasis log seperti Apache Kafka. Produser menambahkan *event* ke *topic*, yang dibagi menjadi *partition*. Setiap *consumer group* melacak *offset*-nya sendiri. Mempartisi berdasarkan `user_id` menjamin bahwa semua *event* seorang pengguna tiba berurutan di konsumen yang sama, persis yang dibutuhkan logika sesi. Karena log disimpan selama beberapa hari, konsumen baru dapat mulai dari awal, dan bug yang sudah diperbaiki dapat dijalankan ulang atas *event* lama.
+Jawaban standarnya adalah *message broker* berbasis log seperti Apache Kafka. Bayangkan sebuah buku catatan tempat penulis hanya menambah baris baru di bagian bawah, tak ada yang menghapus apa pun, dan setiap pembaca menyimpan pembatas buku di baris yang sudah dicapainya. Istilah Kafka cocok dengan gambaran itu:
 
-Pemroses aliran seperti Apache Flink kemudian menghitung fitur secara inkremental. Ambil fitur `user_clicks_30d` dari Bab 9. Dalam SQL ia adalah `COUNT` atas sebuah jendela. Dalam sistem *streaming* ia menjadi operator berstatus: simpan *state* kecil per pengguna, tambah satu untuk setiap klik, kurangi klik yang baru saja keluar dari jendela 30 hari, lalu tulis nilai barunya ke *online store*. Bentuk umumnya adalah *event masuk, state diperbarui, fitur keluar*:
+- ***Topic*** adalah satu buku catatan untuk satu jenis *event*, misalnya semua klik.
+- ***Partition*** adalah satu jilid dari buku catatan itu. Membagi *topic* menjadi beberapa jilid memungkinkan banyak penulis dan pembaca bekerja paralel. Kita memilih jilid berdasarkan `user_id`, sehingga semua *event* Sari mendarat di jilid yang sama, sesuai urutan kejadiannya. Itu persis yang dibutuhkan logika sesi.
+- ***Offset*** adalah pembatas bukunya: nomor baris yang sudah dicapai pembaca.
+- ***Consumer group*** adalah tim pembaca yang berbagi satu *topic*. Setiap tim punya pembatas sendiri, sehingga tim iklan dan tim fraud membaca buku catatan yang sama tanpa saling mengganggu.
+
+Karena log disimpan selama beberapa hari, pembaca baru dapat mulai dari halaman pertama, dan bug yang sudah diperbaiki dapat dijalankan ulang atas *event* lama (*replay*).
+
+Pemroses aliran seperti Apache Flink membaca log secara terus-menerus dan menghitung fitur secara *inkremental*, artinya ia memperbarui hitungan berjalan yang kecil alih-alih menghitung ulang semuanya. Ambil fitur `user_clicks_30d` dari Bab 9. Dalam SQL ia adalah `COUNT` atas sebuah jendela (di sini, 30 hari terakhir). Dalam sistem *streaming* ia menjadi operator berstatus yang menyimpan hitungan kecil per pengguna, yang disebut ***state***:
+
+| Saat | Yang terjadi | `user_clicks_30d` Sari |
+|---|---|---|
+| Sebelum | *State*-nya mencatat 5 klik dalam jendela | 5 |
+| Klik baru tiba | Tambah satu | 6 |
+| Klik dari 30 hari lalu keluar dari jendela | Kurangi satu | 5 |
+
+Bentuk umumnya adalah *event masuk, state diperbarui, fitur keluar*:
 
 $$
 s_u^{(t+1)} = f\bigl(s_u^{(t)},\, e_{t+1}\bigr), \qquad x_u^{(t+1)} = g\bigl(s_u^{(t+1)}\bigr)
 $$
 
-Di sini $s_u$ adalah *state* pengguna $u$, $e$ adalah *event* baru, $f$ memperbarui *state*, dan $g$ mengubah *state* menjadi nilai fitur $x_u$. Skor peluruhan seperti peluruhan eksponensial pada Bab 3 sangat cocok dalam bentuk ini, karena dapat diperbarui dalam waktu konstan: $s \leftarrow s \cdot 2^{-\Delta t / h} + w$, dengan $h$ adalah waktu paruh dan $w$ bobot *event*.
+Di sini $s_u$ adalah *state* pengguna $u$ (hitungan Sari), $e$ adalah *event* baru (kliknya), $f$ adalah aturan yang memperbarui *state* (tambah satu), dan $g$ mengubah *state* menjadi nilai fitur $x_u$ yang akan dibaca pemeringkat (sering kali hanya menyalin hitungannya). Skor peluruhan seperti peluruhan eksponensial pada Bab 3 sangat cocok dalam bentuk ini, karena dapat diperbarui dalam waktu konstan: $s \leftarrow s \cdot 2^{-\Delta t / h} + w$, dengan $h$ adalah waktu paruh (waktu yang dibutuhkan skor untuk menjadi setengahnya), $\Delta t$ adalah waktu sejak pembaruan terakhir, dan $w$ bobot *event*. Cobalah: dengan $h = 7$ hari, *state* 4.0, dan klik baru berbobot $w = 1$ yang tiba tepat 7 hari kemudian, skor lama menjadi setengah, $4.0 \times 0.5 = 2.0$, lalu bertambah 1 menjadi $3.0$. Satu perkalian dan satu penjumlahan; tidak perlu membaca ulang riwayat Sari.
 
-*Streaming* menambah kerumitan: *event* yang terlambat dan tidak berurutan membutuhkan jendela berbasis *event-time* dan *watermark*, *restart* tidak boleh menghitung ganda, dan menghitung fitur sekali di Flink dan sekali lagi secara *batch* mengundang *skew* yang dibahas berikutnya.
+*Streaming* menambah kerumitan. Klik yang dibuat di dalam terowongan bisa sampai ke server dua menit terlambat, sehingga pemroses harus mengelompokkan *event* berdasarkan *event time* (kapan klik terjadi), bukan waktu tiba, dan memakai ***watermark***, penanda yang berarti "kita yakin sudah melihat semuanya hingga waktu $T$", untuk memutuskan kapan sebuah jendela boleh ditutup. *Restart* tidak boleh menghitung *event* dua kali. Dan menghitung fitur sekali di Flink dan sekali lagi di job *batch* mengundang *skew* yang dibahas berikutnya.
 
 ### Feature store dan training/serving skew
 
-Ingat demo kebocoran data (*leakage*) di Bab 9. Fitur yang mengintip masa depan membuat ndcg@20 *offline* tampak 0.5035 dan bukan 0.2116, dan model itu tidak berguna saat live. *Training/serving skew* adalah saudara yang lebih halus dari *leakage*: fiturnya sah di kedua tempat, tetapi dihitung secara berbeda. Contoh umum: pelatihan membaca `user_ctr_30d` dari job SQL yang mengecualikan trafik bot, sementara *serving* menghitungnya di kode aplikasi yang tidak mengecualikan. Model mempelajari hubungan dari satu distribusi lalu ditanyai dengan distribusi lain. Metrik *offline* tetap sangat bagus. Metrik *online* diam-diam melorot.
+Sebuah **fitur** adalah angka tentang pengguna, item, atau pasangan keduanya yang dibaca model, seperti `user_clicks_30d` di Bab 9. Sebuah ***feature store*** adalah katalog bersama, ber-versi, berisi definisi fitur yang memberi makan pelatihan dan permintaan live dari resep yang sama.
 
-*Feature store* menyerang masalah ini dengan menjadikan definisi fitur sebagai satu artefak ber-versi dengan dua materialisasi:
+Ingat demo kebocoran data (*leakage*) di Bab 9: fitur yang mengintip masa depan membuat ndcg@20 *offline* tampak 0.5035 dan bukan 0.2116, dan model itu tidak berguna saat live. *Leakage* adalah *curang*. ***Training/serving skew*** adalah saudara yang lebih halus dan jujur: fiturnya sah di kedua tempat, tetapi dihitung secara berbeda. Bayangkan jaringan restoran yang dapur ujicobanya dan dapur cabangnya masing-masing menyimpan salinan resep sendiri. Satu salinan berbunyi "tiriskan pastanya", yang lain lupa. Hidangannya lezat di dapur uji dan mengecewakan di cabang, padahal tak seorang pun melakukan kesalahan di kedua tempat itu. Solusinya satu kartu resep, bukan koki yang lebih pandai.
 
-- **offline store** (file kolumnar atau *warehouse*) yang dapat menjawab "berapa nilai fitur ini untuk pengguna $u$ *pada waktu* $t$?" untuk jutaan baris pelatihan; dan
-- **online store** (penyimpanan *key-value* berlatensi rendah) yang menjawab "berapa nilainya sekarang?" dalam satu milidetik.
+Berikut contoh kecil. CTR (*click-through rate*) adalah jumlah klik dibagi jumlah ditampilkan. Misalkan sebuah casing ponsel ditampilkan 100 kali dan diklik 5 kali, tetapi 40 dari 100 tampilan itu diberikan kepada bot otomatis yang tidak pernah mengklik. Job pelatihan mengecualikan bot, sehingga menghitung $5 / 60 \approx 0.083$. Kode *serving* adalah kode aplikasi terpisah yang lupa melakukannya, sehingga menghitung $5 / 100 = 0.05$. Model belajar bahwa "0.083 berarti item bagus". Saat live, ia melihat 0.05 untuk item yang sama persis dan meremehkannya. Metrik *offline* tetap sangat bagus. Metrik *online* diam-diam melorot, dan tidak ada yang crash, itulah sebabnya *skew* sulit dikenali.
 
-Definisi yang sama memberi makan keduanya, sehingga angkanya selaras dari rancangannya. Separuh *offline* adalah tempat ketepatan titik-waktu (*point-in-time correctness*) berada. Ia melakukan "*as-of join*" yang dilakukan `data.History.at` di repositori ini: untuk setiap baris pelatihan dengan stempel waktu $t$, ambil nilai fitur terbaru dengan stempel waktu $\le t$, tidak pernah yang lebih baru. Dalam arti ini, gagasannya persis sama dengan Bab 9. *Feature store* hanya meng-industrialisasikannya.
+*Feature store* mencegahnya dengan menjadikan setiap definisi (misalnya `item_ctr_30d`) satu artefak ber-versi dengan dua materialisasi, yaitu dua tempat nilainya benar-benar disimpan:
 
-Pertahanan kedua terhadap *skew* adalah *mencatat fitur yang disajikan*. Alih-alih menghitung ulang fitur historis untuk pelatihan, lapisan *serving* menulis vektor fitur yang benar-benar digunakannya, bersama posisi item dan skor model, ke *exposure log* (garis putus-putus di diagram). Pelatihan kemudian belajar dari persis apa yang disajikan. Ini memakan penyimpanan, tetapi menghapus satu kelas bug sepenuhnya, dan memberi Anda *propensity* yang dibutuhkan untuk koreksi bias posisi pada Bab 12.
+- **offline store** (file kolumnar atau *warehouse*) yang dapat menjawab "berapa nilai fitur ini untuk pengguna $u$ *pada waktu* $t$?" untuk jutaan baris pelatihan sekaligus; dan
+- **online store** (penyimpanan *key-value* berlatensi rendah, seperti tabel pencarian raksasa) yang menjawab "berapa nilainya sekarang?" dalam sekitar satu milidetik.
+
+Definisi yang sama memberi makan keduanya, sehingga angkanya selaras dari rancangannya. Separuh *offline* adalah tempat ketepatan titik-waktu (*point-in-time correctness*) berada. Ia melakukan ***as-of join***: untuk setiap baris pelatihan dengan stempel waktu $t$, ambil nilai fitur terbaru dengan stempel waktu $\le t$, tidak pernah yang lebih baru. Contoh: pada 1 Maret `user_clicks_30d` Sari adalah 5, dan pada 5 Maret menjadi 9. Baris pelatihan dari 1 Maret harus memakai 5. Memakai 9 adalah *leakage*, karena baris itu belajar dari klik yang belum terjadi. Di repositori ini `data.History.at` melakukan persis hal ini, jadi gagasannya sama dengan Bab 9. *Feature store* hanya meng-industrialisasikannya.
+
+Pertahanan kedua terhadap *skew* adalah *mencatat fitur yang disajikan*. Alih-alih menghitung ulang fitur historis untuk pelatihan, lapisan *serving* menulis vektor fitur yang benar-benar digunakannya, bersama posisi item dan skor model, ke ***exposure log***: kuitansi tentang apa yang kita tampilkan kepada Sari dan mengapa (garis putus-putus di diagram). Pelatihan kemudian belajar dari persis apa yang disajikan. Ini memakan penyimpanan, tetapi menghapus satu kelas bug sepenuhnya, dan memberi Anda *propensity* (peluang tiap item ditampilkan pada posisi itu) yang dibutuhkan untuk koreksi bias posisi pada Bab 12.
 
 ### ANN pada miliaran item
 
-Bab 7 menunjukkan indeks IVF yang memeriksa klaster vektor item. Pada 2,311 item yang tersedia, *brute force* membutuhkan 0.140 ms per kueri, dan indeks lebih lama dibangun daripada manfaatnya. Pada seratus juta atau satu miliar item, gambarannya berbalik. Ambil perkiraan memori kasar. Satu miliar item, masing-masing vektor 64 dimensi berisi *float* 4-byte:
+*Pencarian tetangga terdekat* (*nearest-neighbour search*, Bab 7) berarti: diberi vektor Sari, temukan vektor item yang paling dekat dengannya. Pencarian **eksak** membandingkan Sari dengan setiap item. Pencarian tetangga terdekat **hampiran** (*approximate nearest neighbour*, ANN) rela melewatkan beberapa tetangga sejati sebagai ganti melewati sebagian besar perbandingan. Bayangkan perpustakaan. Pencarian eksak berarti membaca setiap punggung buku di seluruh gedung. Pencarian hampiran berarti berjalan ke bagian yang tepat dan hanya memindai rak itu. Anda mungkin melewatkan buku bagus yang disimpan di tempat lain, tetapi selesai dalam hitungan detik. (Indeks IVF di Bab 7 bekerja persis seperti ini: klasternya adalah bagian-bagian perpustakaan.)
+
+Pada 2,311 item yang tersedia, *brute force* membutuhkan 0.140 ms per kueri, dan indeks lebih lama dibangun daripada manfaatnya. Pada seratus juta atau satu miliar item, gambarannya berbalik. Ambil perkiraan memori kasar. Satu miliar item, masing-masing vektor 64 dimensi berisi *float* 4-byte. Satu item adalah $64 \times 4 = 256$ byte. Satu miliar item:
 
 $$
 10^9 \times 64 \times 4\ \text{bytes} = 2.56 \times 10^{11}\ \text{bytes} = 256\ \text{GB}.
 $$
 
-Itu tidak muat dengan nyaman di satu mesin, dan memindainya per permintaan mustahil. Karena itu sistem produksi melakukan tiga hal sekaligus.
+Itu jauh melebihi memori satu mesin biasa, dan memindai semuanya per permintaan mustahil. Karena itu sistem produksi melakukan tiga hal sekaligus.
 
-Pertama, **shard** indeksnya. Setiap *shard* menyimpan sebagian katalog, dan kueri disebar ke semua *shard*, yang masing-masing mengembalikan hasil teratas lokalnya untuk digabungkan. Kedua, **kompres** vektornya. *Product quantisation* memecah vektor menjadi sub-vektor dan mengganti masing-masing dengan id *codeword* terdekatnya. Vektor 256-byte bisa menjadi 16 byte, menyusutkan indeks yang sama menjadi $10^9 \times 16 = 16$ GB. Ketiga, gunakan **indeks graf atau berklaster** (HNSW, IVF-PQ, atau ScaNN dari Google) agar setiap kueri hanya menyentuh sebagian kecil vektor. Trade-off-nya persis seperti pada tabel Bab 7, di mana memeriksa 4 dari 32 klaster mempertahankan recall@20 pada 0.975 dari *brute force* sambil memindai 12.5% item. Pada skala besar Anda mengatur kenop yang sama, hanya dengan target latensi yang lebih ketat dan katalog yang jauh lebih besar.
+**1. *Shard* indeksnya.** Sebuah *shard* adalah satu irisan katalog yang disimpan di mesinnya sendiri, seperti perpustakaan dengan beberapa cabang. Kueri dikirim ke setiap *shard*, masing-masing mengembalikan hasil terbaiknya sendiri, dan satu mesin menggabungkannya. Contoh kecil: tiga *shard* masing-masing mengembalikan 2 skor teratas, (0.9, 0.7), (0.8, 0.6), dan (0.5, 0.4). Penggabungan menghasilkan 2 teratas keseluruhan: 0.9 dan 0.8. Ini benar karena setiap item dalam 2 teratas global pasti juga ada di 2 teratas *shard*-nya sendiri.
 
-Indeks dibangun ulang, bukan disunting, dan *item tower* harus dijalankan ulang untuk seluruh katalog setiap kali model berubah, sehingga versi model dan indeks dirilis sebagai satu pasangan.
+**2. Kompres vektornya.** *Product quantisation* (PQ) bekerja seperti melukis dengan nomor. Potong vektor menjadi potongan-potongan pendek. Untuk setiap potongan, sediakan palet berisi 256 potongan tipikal, dan simpan hanya nomor entri palet terdekat (satu byte). Contoh kecil: vektor 8 angka (32 byte) dipotong menjadi dua potongan berisi 4 angka, masing-masing diganti id palet 1 byte, sehingga menyusut menjadi 2 byte. Sebagian ketelitian hilang, karena tiap potongan hanya dipulihkan secara hampiran, tetapi memori turun tajam. Untuk vektor 256-byte kita, 16 potongan berisi 4 angka dengan satu byte masing-masing menghasilkan 16 byte, menyusutkan indeks yang sama menjadi $10^9 \times 16 = 16$ GB.
+
+**3. Gunakan indeks graf atau berklaster** agar setiap kueri hanya menyentuh sebagian kecil vektor. IVF mengelompokkan vektor ke dalam klaster dan hanya mencari beberapa klaster terdekat (Bab 7). HNSW menghubungkan setiap vektor dengan "teman" terdekatnya dan melompat dari teman ke teman menuju kueri. IVF-PQ menggabungkan klaster dengan kompresi. ScaNN adalah pustaka Google dalam keluarga yang sama. Trade-off-nya persis seperti pada tabel Bab 7, di mana memeriksa 4 dari 32 klaster mempertahankan recall@20 pada 0.975 dari *brute force* sambil memindai 12.5% item. Pada skala besar Anda mengatur kenop yang sama (seberapa banyak yang dilihat berbanding seberapa banyak yang mungkin terlewat), hanya dengan target latensi yang lebih ketat dan katalog yang jauh lebih besar.
+
+Indeks dibangun ulang, bukan disunting, dan *item tower* (separuh model two-tower yang mengubah item menjadi vektor) harus dijalankan ulang untuk seluruh katalog setiap kali model berubah, sehingga versi model dan indeks dirilis sebagai satu pasangan.
 
 ::: fact
 **Graph embedding skala web.** PinSage milik Pinterest menggabungkan *random walk* dengan konvolusi graf untuk mempelajari *embedding* pin. Ia dilatih pada graf dengan 3 miliar simpul (pin dan *board*) dan 18 miliar sisi, yang oleh para penulisnya disebut sebagai penerapan *graph embedding* mendalam terbesar pada saat publikasi.
@@ -120,31 +172,31 @@ Sumber: Ying et al., KDD, 2018
 
 ### Pemeringkat deep
 
-Pohon *gradient-boosted* adalah pemeringkat yang sangat baik untuk beberapa lusin hingga beberapa ratus fitur padat, dan papan peringkat di akhir bab ini menunjukkan sejauh mana mereka bisa melangkah pada data simulasi kita. Di marketplace besar, masukan pemeringkat terlihat berbeda: miliaran id jarang (*sparse*) (pengguna, item, toko, kueri), urutan perilaku yang panjang, dan beberapa hasil yang diprediksi sekaligus. Pohon kurang cocok untuk ini, karena pohon tidak bisa mempelajari *embedding* untuk id yang hanya muncul sebulan sekali. Pemeringkat neural bisa. Berikut empat keluarga yang paling sering Anda dengar.
+Sebuah **pemeringkat** (*ranker*) adalah model yang memberi skor pada setiap kandidat agar dapat diurutkan. Pohon *gradient-boosted* adalah pemeringkat yang sangat baik untuk beberapa lusin hingga beberapa ratus fitur padat, dan papan peringkat di akhir bab ini menunjukkan sejauh mana mereka bisa melangkah pada data simulasi kita. Di marketplace besar, masukan pemeringkat terlihat berbeda: miliaran *id jarang* (*sparse id*: id toko, id pengguna, kueri pencarian; kategori dengan jumlah nilai sangat banyak, yang masing-masing jarang terlihat), urutan perilaku yang panjang, dan beberapa hasil yang diprediksi sekaligus. Pohon kurang cocok untuk ini, karena pohon tidak bisa mempelajari sesuatu yang berguna tentang id yang hanya muncul sebulan sekali. Pemeringkat neural bisa, dengan memakai ***embedding***: daftar pendek angka, dipelajari oleh model, yang berfungsi sebagai sidik jari sebuah id, sehingga id yang mirip mendapat angka yang mirip (Bab 7). Dua istilah lagi sebelum mulai. **MLP** (*multi-layer perceptron*) adalah jaringan neural kecil: lapisan-lapisan jumlah berbobot sederhana, masing-masing diikuti sebuah lengkungan. **Logit** adalah skor mentah, angka apa pun dari minus hingga plus tak hingga, yang dipadatkan fungsi sigmoid $\sigma$ ke rentang 0 sampai 1 agar terbaca sebagai probabilitas: $\sigma(0) = 0.5$, $\sigma(2) \approx 0.88$, $\sigma(-2) \approx 0.12$. Berikut empat keluarga yang paling sering Anda dengar.
 
-**Wide & Deep.** Tim Google Play mengamati dua kebutuhan yang saling melengkapi. *Memorisasi*: mempelajari bahwa pasangan tertentu, seperti "memasang aplikasi A dan ditampilkan aplikasi B", sangat prediktif. *Generalisasi*: menangani pasangan yang belum pernah muncul bersamaan, melalui *embedding*. Wide & Deep melatih keduanya bersama-sama. Bagian "wide" adalah model linear atas fitur silang (*cross-product*) yang jarang. Bagian "deep" adalah MLP atas *embedding*. Keluarannya dijumlahkan menjadi satu logit:
+**Wide & Deep.** Tim Google Play mengamati dua kebutuhan yang saling melengkapi. *Memorisasi* adalah mempelajari bahwa pasangan tertentu, seperti "memasang aplikasi A dan ditampilkan aplikasi B", sangat prediktif. *Generalisasi* adalah menangani pasangan yang belum pernah muncul bersamaan, melalui *embedding*. Bayangkan dua siswa yang menyiapkan ujian. Satu menghafal jawaban tahun lalu, yang sempurna untuk soal yang berulang. Yang lain mempelajari prinsipnya, yang menangani soal baru. Wide & Deep mempekerjakan keduanya dan menjumlahkan pendapat mereka. Bagian "wide" adalah model linear atas fitur silang (*cross-product*) yang jarang (fitur silang adalah "DAN", seperti "melihat A **dan** B"). Bagian "deep" adalah MLP atas *embedding*. Keluarannya dijumlahkan menjadi satu logit:
 
 $$
 P(y=1 \mid \mathbf{x}) = \sigma\bigl(\mathbf{w}_{\text{wide}}^{\top}[\mathbf{x}, \phi(\mathbf{x})] + \mathbf{w}_{\text{deep}}^{\top} a^{(L)} + b\bigr)
 $$
 
-dengan $\phi(\mathbf{x})$ adalah transformasi *cross-product* dan $a^{(L)}$ adalah lapisan tersembunyi terakhir dari MLP. Di repositori kita, fitur silang buatan tangan dari Bab 9 (`uc_click_share_30d`, `price_ratio_to_user`) berperan sebagai bagian wide, dibuat oleh seorang *engineer* dan diberikan ke pohon. Pada **DCN** (Deep & Cross Network), persilangannya dipelajari: lapisan silang eksplisit mengalikan fitur masukan satu sama lain, lapis demi lapis, sehingga Anda tidak perlu lagi menulis tangan setiap interaksi.
+Dalam kata-kata: $\mathbf{x}$ adalah fitur masukan, $y = 1$ berarti "pengguna mengklik", $\phi(\mathbf{x})$ adalah transformasi *cross-product*, $\mathbf{w}_{\text{wide}}$ membobot masukan wide, $a^{(L)}$ adalah lapisan tersembunyi terakhir dari MLP, $\mathbf{w}_{\text{deep}}$ membobotnya, dan $b$ adalah konstanta penggeser. Angka mainan: misalkan bagian wide menambah $+1.5$ (pasangan ini sering diklik), bagian deep menambah $+0.5$, dan $b = -1$. Logitnya $1.5 + 0.5 - 1 = 1.0$ dan $\sigma(1.0) \approx 0.73$, yaitu probabilitas klik 73%. Di repositori kita, fitur silang buatan tangan dari Bab 9 (`uc_click_share_30d`, `price_ratio_to_user`) berperan sebagai bagian wide, dibuat oleh seorang *engineer* dan diberikan ke pohon. Pada **DCN** (Deep & Cross Network), persilangannya dipelajari: lapisan silang eksplisit mengalikan fitur masukan satu sama lain, lapis demi lapis, sehingga Anda tidak perlu lagi menulis tangan setiap interaksi.
 
-**DIN.** Deep Interest Network milik Alibaba berangkat dari pengamatan tentang e-commerce. Riwayat pengguna memuat banyak minat, dan hanya sebagian yang relevan untuk item yang sedang dinilai. Memampatkan seluruh riwayat menjadi satu vektor tetap membuang kapasitas. DIN menambahkan *local activation unit*: item-item dalam riwayat pengguna diberi bobot menurut relevansinya terhadap item *kandidat*, sehingga pengguna yang sama mendapat vektor minat yang berbeda ketika kandidatnya casing ponsel dibandingkan penggorengan. Dalam pseudo-rumus:
+**DIN.** Deep Interest Network milik Alibaba berangkat dari pengamatan tentang e-commerce. Riwayat pengguna memuat banyak minat, dan hanya sebagian yang relevan untuk item yang sedang dinilai. Memampatkan seluruh riwayat menjadi satu vektor tetap membuang kapasitas. DIN menambahkan *local activation unit*: setiap item riwayat diberi bobot yang menyatakan seberapa relevan ia terhadap item *kandidat* (item yang sedang kita nilai saat ini), sehingga pengguna yang sama mendapat vektor minat yang berbeda tergantung kandidatnya. Contoh kecil: riwayat Sari adalah sekantong makanan kucing, mainan kucing, dan casing ponsel. Untuk kandidat "casing ponsel", bobotnya mungkin kira-kira 0.1, 0.1, dan 0.8, sehingga casing ponsel mendominasi. Untuk kandidat "pasir kucing", mungkin 0.5, 0.4, dan 0.1, sehingga item kucing yang mendominasi. Sari yang sama, dua vektor minat yang berbeda. Dalam pseudo-rumus:
 
 $$
 \mathbf{v}_u(a) = \sum_{j=1}^{H} w_j(a)\,\mathbf{e}_j, \qquad w_j(a) = \text{MLP}\bigl(\mathbf{e}_j,\ \mathbf{e}_a,\ \mathbf{e}_j \odot \mathbf{e}_a\bigr)
 $$
 
-Di sini $\mathbf{e}_j$ adalah *embedding* dari $H$ item lampau pengguna dan $\mathbf{e}_a$ adalah *embedding* kandidat. Bandingkan dengan *user tower* di Bab 7, yang merata-ratakan 20 item terakhir dengan bobot sama. DIN adalah gagasan yang sama, dengan bobot yang dipelajari dan bergantung pada kandidat. Model urutan berbasis Transformer, yang kini lazim, menggeneralisasikannya lebih jauh dengan *self-attention*.
+Di sini $\mathbf{e}_j$ adalah *embedding* dari $H$ item lampau pengguna (pada contoh di atas $H = 3$) dan $\mathbf{e}_a$ adalah *embedding* kandidat. Simbol $\odot$ mengalikan dua *embedding* angka demi angka, yang bernilai besar di tempat keduanya sepakat, sehingga memberi MLP sinyal cepat "seberapa mirip keduanya?". Hasilnya $\mathbf{v}_u(a)$ adalah jumlah berbobot dari *embedding* riwayat. Bandingkan dengan *user tower* di Bab 7, yang merata-ratakan 20 item terakhir dengan bobot sama. DIN adalah gagasan yang sama, dengan bobot yang dipelajari dan bergantung pada kandidat. Model urutan berbasis Transformer, yang kini lazim, menggeneralisasikannya lebih jauh dengan *self-attention*.
 
-**MMoE multi-tugas.** Marketplace peduli pada setidaknya tiga hasil: klik, tambah-ke-keranjang, dan pesanan. Di repositori ini kita memerasnya menjadi satu label (klik bernilai 1, keranjang 2, pesanan 3) dan melatih satu model LambdaMART. Itu murah, tetapi mengunci trade-off-nya dan hanya memberi model satu target yang berisik. Jaringan multi-tugas memprediksi setiap hasil dengan *head*-nya sendiri dan berbagi lapisan bawah. Versi naifnya, satu *trunk* bersama, menderita ketika tugas-tugas bertentangan: apa yang membuat pengguna mengklik (gambar yang menarik) berbeda dari apa yang membuatnya membeli. Rancangan *Multi-gate Mixture-of-Experts* mempertahankan beberapa sub-jaringan "ahli" (*expert*) bersama dan memberi setiap tugas gerbang (*gate*) sendiri yang memutuskan cara mencampurnya:
+**MMoE multi-tugas.** Marketplace peduli pada setidaknya tiga hasil: klik, tambah-ke-keranjang, dan pesanan. Di repositori ini kita memerasnya menjadi satu label (klik bernilai 1, keranjang 2, pesanan 3) dan melatih satu model LambdaMART. Itu murah, tetapi mengunci trade-off-nya dan hanya memberi model satu target yang berisik. Jaringan **multi-tugas** memprediksi setiap hasil dengan ***head***-nya sendiri (lapisan kecil terakhir yang mengeluarkan satu prediksi) dan berbagi lapisan bawah. Versi naifnya, satu *trunk* bersama, menderita ketika tugas-tugas bertentangan: apa yang membuat pengguna mengklik (gambar yang menarik) berbeda dari apa yang membuatnya membeli. Rancangan *Multi-gate Mixture-of-Experts* seperti rumah sakit dengan panel spesialis. "Ahli" (*expert*) bersama adalah para spesialis, dan setiap tugas punya koordinatornya sendiri, yaitu gerbang (***gate***), yang memutuskan seberapa banyak mendengarkan tiap spesialis:
 
 $$
 y_k = h_k\Bigl(\sum_{i=1}^{n} g_k(\mathbf{x})_i \, f_i(\mathbf{x})\Bigr), \qquad g_k(\mathbf{x}) = \text{softmax}(W_{g_k}\,\mathbf{x})
 $$
 
-untuk tugas $k$, jaringan ahli $f_i$, *head* tugas $h_k$, dan gerbang per-tugas $g_k$. Jika klik dan pesanan berkaitan erat, gerbang mereka akan memilih ahli yang mirip. Jika bertentangan, gerbang akan mengkhususkan diri. Karena pesanan jarang dibandingkan klik (corong pada Bab 1), *head* `order` yang jarang juga diuntungkan oleh representasi yang dipelajari *head* `click` yang padat. Skor produksi kemudian menggabungkan semua *head*, yang membawa kita ke topik berikutnya.
+untuk tugas $k$, jaringan ahli $f_i$, *head* tugas $h_k$, dan gerbang per-tugas $g_k$. ***Softmax*** mengubah daftar skor apa pun menjadi bobot positif yang berjumlah 1. Contoh: skor $(2, 1, 0)$ menjadi $e^2, e^1, e^0 = 7.39, 2.72, 1.00$, yang berjumlah 11.11, sehingga bobotnya $(0.67, 0.24, 0.09)$ setelah pembulatan. Sekarang misalkan tiga ahli mengeluarkan $0.4$, $0.9$, dan $-0.2$ untuk satu item. Gerbang klik memakai bobot $(0.67, 0.24, 0.09)$ dan mencampurnya menjadi $0.67 \times 0.4 + 0.24 \times 0.9 + 0.09 \times (-0.2) \approx 0.47$. Gerbang pesanan memakai bobot $(0.09, 0.24, 0.67)$ dan mencampur ahli yang sama menjadi $\approx 0.12$. Ahli yang sama, campuran berbeda per tugas. Jika klik dan pesanan berkaitan erat, gerbang mereka akan memilih ahli yang mirip. Jika bertentangan, gerbang akan mengkhususkan diri. Karena pesanan jarang dibandingkan klik (corong pada Bab 1), *head* `order` yang jarang juga diuntungkan oleh representasi yang dipelajari *head* `click` yang padat. Skor produksi kemudian menggabungkan semua *head*, yang membawa kita ke topik berikutnya.
 
 ::: fact
 **Atensi pada riwayat pengguna.** Deep Interest Network (DIN) milik Alibaba mengganti vektor pengguna berpanjang tetap dari resep Embedding-and-MLP standar dengan *local activation unit* yang memberi bobot pada perilaku lampau pengguna menurut relevansinya terhadap iklan kandidat. Ia dilatih pada dataset produksi Alibaba berisi lebih dari 2 miliar sampel dan diterapkan di sistem iklan *display* online Alibaba, melayani trafik utama.
@@ -160,13 +212,17 @@ Sumber: Cheng et al., DLRS Workshop, 2016
 
 ### Pemeringkatan multi-tujuan: GMV, iklan, dan penjual
 
-Setelah pemeringkat mengeluarkan $\hat{p}_{\text{click}}$, $\hat{p}_{\text{cart}}$, dan $\hat{p}_{\text{order}}$ secara terpisah, seseorang harus memutuskan cara memadukannya. Bentuk paling sederhana adalah jumlah berbobot, sering dengan suku bisnis untuk margin atau penempatan bersponsor:
+**Pemeringkatan multi-tujuan** (*multi-objective ranking*) berarti urutan akhir harus melayani beberapa tujuan sekaligus: pembeli menemukan hal yang mereka sukai, perusahaan memperoleh uang, dan penjual mendapat kesempatan yang adil. Setelah pemeringkat mengeluarkan $\hat{p}_{\text{click}}$, $\hat{p}_{\text{cart}}$, dan $\hat{p}_{\text{order}}$ (probabilitas prediksi untuk tiap aksi) secara terpisah, seseorang harus memutuskan cara memadukannya. Bentuk paling sederhana adalah jumlah berbobot, sering dengan suku bisnis untuk margin atau penempatan bersponsor (sebuah *iklan*: penjual membayar *bid* agar ditampilkan, dan platform memperoleh uang ketika iklan itu diklik):
 
 $$
 \text{score}(u, i) = \Bigl(w_1\,\hat{p}_{\text{click}} + w_2\,\hat{p}_{\text{cart}} + w_3\,\hat{p}_{\text{order}}\Bigr)\cdot \bigl(1 + \beta_{\text{boost}}(i)\bigr) + \lambda_{\text{ads}}\,\text{bid}(i)\,\hat{p}_{\text{click}}
 $$
 
-Bobot-bobot ini tidak dipelajari dari klik. Mereka adalah kebijakan. Menaikkan $w_3$ mengutamakan GMV (*gross merchandise value*), dan menaikkan $\lambda_{\text{ads}}$ mengutamakan pendapatan iklan. *Boost* $\beta_{\text{boost}}(i)$ menyandikan aturan kampanye, seperti subsidi tingkat toko untuk merek mall selama sale. Ini adalah struktur yang sama dengan aturan *re-ranking* di Bab 11, yang dinaikkan dari "batasan dalam fungsi Python" menjadi bagian formal dari tujuan, dan sistem produksi yang baik bersikap eksplisit tentangnya. Semua orang dapat membaca bobotnya, memperdebatkannya, dan melihatnya di konfigurasi eksperimen. Bahayanya adalah keterkaitan tersembunyi: pemeringkat yang dilatih untuk memprediksi pesanan lalu dibobot ulang berdasarkan margin bisa mengejar barang mahal yang jarang terkonversi.
+Bobot-bobot ini tidak dipelajari dari klik. Mereka adalah kebijakan: seberapa besar kita menghargai tiap aksi. Menaikkan $w_3$ mengutamakan GMV (*gross merchandise value*, total nilai barang yang terjual), dan menaikkan $\lambda_{\text{ads}}$ mengutamakan pendapatan iklan. *Boost* $\beta_{\text{boost}}(i)$ menyandikan aturan kampanye, seperti subsidi tingkat toko untuk merek mall selama sale (0.1 berarti kenaikan 10%).
+
+Telusuri dua item dengan probabilitas khayalan. Item A, casing ponsel, punya $(\hat p_{\text{click}}, \hat p_{\text{cart}}, \hat p_{\text{order}}) = (0.30, 0.10, 0.02)$. Item B, penanak nasi, punya $(0.10, 0.08, 0.05)$. Dengan bobot $(1, 2, 3)$, A mendapat $0.30 + 0.20 + 0.06 = 0.56$ dan B mendapat $0.10 + 0.16 + 0.15 = 0.41$, jadi A menang. Ubah bobot pesanan menjadi 10, artinya "kini kita terutama peduli pada pembelian", dan A mendapat $0.30 + 0.20 + 0.20 = 0.70$ sementara B mendapat $0.10 + 0.16 + 0.50 = 0.76$. Peringkatnya terbalik tanpa melatih ulang apa pun. Itulah sebabnya bobot adalah keputusan bisnis, bukan detail teknis.
+
+Ini adalah struktur yang sama dengan aturan *re-ranking* di Bab 11, yang dinaikkan dari "batasan dalam fungsi Python" menjadi bagian formal dari tujuan, dan sistem produksi yang baik bersikap eksplisit tentangnya. Semua orang dapat membaca bobotnya, memperdebatkannya, dan melihatnya di konfigurasi eksperimen. Bahayanya adalah keterkaitan tersembunyi: pemeringkat yang dilatih untuk memprediksi pesanan lalu dibobot ulang berdasarkan margin bisa mengejar barang mahal yang jarang terkonversi.
 
 Keadilan bagi penjual masuk dengan dua cara. Sebagai **batasan**, ia seperti batas 4 item per toko di `rerank.rerank` pada repositori. Sebagai **tujuan**, Anda memberi penjual baru atau kecil sejumlah eksposur yang terkendali, karena marketplace yang hanya menampilkan toko-toko lama akan membuat sisi pasokannya sendiri kelaparan. Ini adalah gagasan eksplorasi dari Bab 11 dan Bab 12, diterapkan pada penjual alih-alih item. Apa pun pilihan Anda, *ukur secara terpisah*. Lacak metrik sisi penjual (porsi eksposur ke toko berusia di bawah 30 hari, konsentrasi antar toko) di samping metrik sisi pembeli dalam setiap eksperimen, dan perlakukan penurunan di salah satunya sebagai biaya.
 
@@ -178,68 +234,96 @@ Sumber: Ma et al., KDD, 2018
 
 ### Uji A/B, lengkap dengan aritmetikanya
 
-Setiap angka di papan peringkat di bawah adalah *offline*. Angka itu dihitung dari log tentang apa yang dilakukan pengguna di bawah sistem sebelumnya. Metrik *offline* memeringkatkan model kandidat dengan murah, tetapi tidak dapat memastikan apakah sebuah model membantu pengguna sungguhan, karena alasan dari Bab 2 dan 12: data log mencerminkan pilihan sistem lama, bias posisi sudah tertanam, dan metrik kita mengabaikan diversitas dan pendapatan. Penentu akhirnya adalah **uji A/B**: tetapkan pengguna secara acak ke kontrol (sistem saat ini) atau perlakuan (sistem baru), tunggu, lalu bandingkan metrik bisnis.
+Setiap angka di papan peringkat di bawah adalah *offline*. Angka itu dihitung dari log tentang apa yang dilakukan pengguna di bawah sistem sebelumnya. Metrik *offline* memeringkatkan model kandidat dengan murah, tetapi tidak dapat memastikan apakah sebuah model membantu pengguna sungguhan, karena alasan dari Bab 2 dan 12: data log mencerminkan pilihan sistem lama, bias posisi sudah tertanam, dan metrik kita mengabaikan diversitas dan pendapatan. Penentu akhirnya adalah **uji A/B**: uji cicip yang adil pada lalu lintas live. Seperti warung makan yang melempar koin untuk setiap pelanggan guna menyajikan resep A atau resep B, lalu membandingkan berapa banyak yang kembali, kita menetapkan pengguna secara acak ke kontrol (sistem saat ini) atau perlakuan (sistem baru), menunggu, lalu membandingkan metrik bisnis. Lemparan koin itulah yang membuat perbandingan adil: kedua kelompok sama kecuali resepnya.
+
+Menjalankan ini pada skala besar membutuhkan infrastruktur, dan setiap bagiannya punya tugas:
+
+- **Layanan penugasan** (*assignment service*) yang menentukan varian setiap pengguna (di bawah).
+- ***Logging*** yang menandai setiap *event* dengan varian pengguna, sehingga tidak ada hasil yang salah dikaitkan ke kelompok lain.
+- **Pipeline metrik dan dasbor** yang menghitung metrik utama dan *guardrail* per varian.
+- **Pemeriksaan otomatis**, seperti pemeriksaan rasio sampel di bawah, yang menghentikan eksperimen rusak sebelum ada yang membaca angkanya.
 
 Mekanismenya mengikuti resep tetap:
 
-1. Pilih *metrik utama* (misalnya konversi pesanan per pengguna) dan *metrik pengaman* (*guardrail*: latensi, eksposur sisi penjual, tingkat retur) sebelum peluncuran.
+1. Pilih *metrik utama* (misalnya konversi pesanan per pengguna) dan *metrik pengaman* (*guardrail*) sebelum peluncuran. *Guardrail* adalah metrik yang **tidak boleh** memburuk meskipun metrik utama membaik, seperti pagar pengaman di jalan pegunungan. Contoh: latensi, eksposur sisi penjual, tingkat retur. Jika pemeringkat baru menaikkan pesanan tetapi menggandakan latensi halaman, *guardrail* menghentikan peluncuran.
 2. Hitung ukuran sampel yang dibutuhkan dari efek terkecil yang Anda pedulikan.
-3. Acak **per pengguna**, dengan *hash* yang stabil, agar satu pengguna selalu melihat satu varian.
-4. Periksa penugasannya sendiri. Jika Anda berniat membagi 50/50 dan mengamati 50.6/49.4 pada jutaan pengguna, ada yang rusak (*sample ratio mismatch*), dan hasilnya tidak bisa dipercaya.
-5. Jalankan selama siklus mingguan penuh, lalu uji selisihnya.
+3. Acak **per pengguna**, dengan *hash* yang stabil, agar satu pengguna selalu melihat satu varian. *Hash* adalah fungsi pengacak tetap: masukan yang sama selalu menghasilkan keluaran yang sama, tetapi keluarannya tampak acak. Misalnya, ambil $\text{hash}(\text{user\_id} + \text{nama eksperimen}) \bmod 100$ untuk mendapat *bucket* dari 0 sampai 99. Jika *bucket* Sari adalah 37 dan aturannya "0–49 adalah kontrol", ia berada di kontrol pada setiap kunjungan, dan separuh pengguna lainnya masuk ke perlakuan. Mencampurkan nama eksperimen ke dalam *hash* menjaga eksperimen yang berbeda tetap independen.
+4. Periksa penugasannya sendiri. Jika Anda berniat membagi 50/50 dan mengamati 50.6/49.4 pada jutaan pengguna, ada yang rusak (*sample ratio mismatch*), dan hasilnya tidak bisa dipercaya. Untuk melihat alasannya, bayangkan 1,000,000 pengguna. Koin yang adil menghasilkan goyangan tipikal sebesar $\sqrt{1{,}000{,}000 \times 0.5 \times 0.5} = 500$ pengguna, tetapi 50.6% berarti 6,000 pengguna di atas titik tengah, dua belas kali goyangan itu. Kebetulan tidak melakukan ini; bug (misalnya bot yang disaring hanya dari satu kelompok) bisa.
+5. Jalankan selama siklus mingguan penuh (hari kerja dan akhir pekan berperilaku berbeda), lalu uji selisihnya.
 
 Berikut contoh lengkap yang dikerjakan. **Semua angka di bawah ini hipotetis**, dibuat untuk menunjukkan cara kerjanya. Angka-angka itu bukan keluaran skrip repositori ini.
 
 Misalkan setiap varian menerima $n = 100{,}000$ pengguna. Pada kontrol, 8,000 pengguna membuat pesanan, sehingga $\hat{p}_C = 0.0800$. Pada perlakuan, 8,240 pengguna, sehingga $\hat{p}_T = 0.0824$. Peningkatan absolut yang teramati adalah $0.0824 - 0.0800 = 0.0024$, peningkatan relatif 3%. Apakah ini nyata atau hanya derau?
 
-Uji-z dua proporsi dimulai dari hipotesis nol bahwa kedua varian memiliki laju dasar yang sama. Di bawah hipotesis itu, estimasi terbaik untuk laju bersama adalah proporsi gabungan (*pooled*):
+Pertanyaannya seperti melempar dua koin masing-masing 100,000 kali dan mendapati satu koin mendarat di sisi kepala sedikit lebih sering. Apakah itu keberuntungan, atau koin yang lebih baik? **Uji-z** menjawabnya dalam empat langkah. Pertama, andaikan **hipotesis nol**: kedua varian sebenarnya punya laju pesanan yang sama, sehingga selisih apa pun hanyalah keberuntungan. Kedua, ukur seberapa besar selisih yang biasanya dihasilkan keberuntungan saja (galat baku). Ketiga, nyatakan selisih yang teramati dalam satuan keberuntungan tipikal itu (statistik z). Keempat, ubah menjadi **nilai-p**: jika sebenarnya tidak ada perbedaan, seberapa sering keberuntungan menghasilkan selisih sebesar ini atau lebih? Nilai-p yang kecil berarti selisih itu sulit disalahkan pada keberuntungan.
+
+Di bawah hipotesis nol, estimasi terbaik untuk laju bersama adalah proporsi gabungan (*pooled*, semua pesanan dibagi semua pengguna):
 
 $$
 \hat{p} = \frac{x_C + x_T}{n_C + n_T} = \frac{8000 + 8240}{200000} = 0.0812
 $$
 
-Galat baku selisih, di bawah hipotesis nol, adalah
+Galat baku (*standard error*, SE) adalah ukuran tipikal selisih antara dua laju yang murni karena keberuntungan. Di bawah hipotesis nol, nilainya
 
 $$
 \text{SE} = \sqrt{\hat{p}(1-\hat{p})\left(\frac{1}{n_C}+\frac{1}{n_T}\right)} = \sqrt{0.0812 \times 0.9188 \times \frac{2}{100000}} \approx 0.001222
 $$
 
-Statistik uji menghitung berapa galat baku jarak selisih yang teramati dari nol:
+Setiap bagiannya punya arti: $\hat p(1-\hat p)$ adalah seberapa "tersebar" hasil ya/tidak, dan suku $\frac{1}{n}$ mengecilkan SE seiring bertambahnya pengguna. Statistik uji menghitung berapa galat baku jarak selisih yang teramati dari nol:
 
 $$
 z = \frac{\hat{p}_T - \hat{p}_C}{\text{SE}} = \frac{0.0024}{0.001222} \approx 1.965
 $$
 
-Untuk uji dua sisi, nilai-p adalah $2\,(1 - \Phi(1.965)) \approx 0.0494$, dengan $\Phi$ adalah CDF normal baku. Pada $\alpha = 0.05$ yang lazim, ini baru saja melewati ambang. Selang kepercayaan 95% untuk selisihnya (memakai galat baku tanpa *pooling*, juga sekitar 0.001222) kira-kira $[0.000006,\ 0.004794]$: ia nyaris tidak mengecualikan nol, sehingga peningkatan sebenarnya bisa berada di mana saja dari nyaris tidak ada hingga 6% relatif. Itulah pembacaan yang jujur. "Signifikan" di sini berarti "kita tidak bisa dengan nyaman menyingkirkan nol", bukan "peningkatannya 3%". Jika Anda mengintip dasbor setiap hari dan berhenti pada kali pertama $p < 0.05$, laju positif palsu Anda yang sebenarnya akan jauh lebih tinggi dari 5%. Tingkat signifikansi mengasumsikan satu kali pengamatan yang direncanakan sebelumnya.
+Jadi selisih kita berjarak sekitar dua langkah "sebesar keberuntungan tipikal" dari nol. Untuk uji dua sisi (selisih ke arah mana pun dihitung), nilai-p adalah $2\,(1 - \Phi(1.965)) \approx 0.0494$, dengan $\Phi$ adalah CDF normal baku (tabel yang mengubah nilai z menjadi probabilitas). Pada tingkat signifikansi $\alpha = 0.05$ yang lazim (kita menerima peluang 5% untuk alarm palsu), ini baru saja melewati ambang. Selang kepercayaan 95% untuk selisihnya (rentang peningkatan sebenarnya yang masuk akal; memakai galat baku tanpa *pooling*, juga sekitar 0.001222) kira-kira $[0.000006,\ 0.004794]$: ia nyaris tidak mengecualikan nol, sehingga peningkatan sebenarnya bisa berada di mana saja dari nyaris tidak ada hingga 6% relatif. Itulah pembacaan yang jujur. "Signifikan" di sini berarti "kita tidak bisa dengan nyaman menyingkirkan nol", bukan "peningkatannya 3%". Jika Anda mengintip dasbor setiap hari dan berhenti pada kali pertama $p < 0.05$, laju positif palsu Anda yang sebenarnya akan jauh lebih tinggi dari 5%, seperti memeriksa koin setelah setiap lemparan yang pada akhirnya pasti menampilkan rentetan yang mencurigakan. Tingkat signifikansi mengasumsikan satu kali pengamatan yang direncanakan sebelumnya.
 
-Berapa pengguna yang kita butuhkan? Untuk efek absolut target $\delta$ pada signifikansi $\alpha$ dan daya (*power*) $1 - \beta$, ukuran sampel per varian kira-kira
+Berapa pengguna yang kita butuhkan? Jawabannya bergantung pada **daya** (*power*): peluang uji menyadari efek nyata sebesar yang kita pedulikan. Uji dengan daya 80% menangkap efek seperti itu 8 dari 10 kali. Untuk efek absolut target $\delta$ pada signifikansi $\alpha$ dan daya $1 - \beta$, ukuran sampel per varian kira-kira
 
 $$
 n \approx \frac{2\,(z_{\alpha/2} + z_{\beta})^2\; p(1-p)}{\delta^2}
 $$
 
-Dengan $p = 0.08$, $\delta = 0.0024$, $z_{\alpha/2} = 1.96$, dan $z_{\beta} = 0.8416$ (daya 80%):
+dengan $z_{\alpha/2}$ dan $z_\beta$ adalah nilai batas baku untuk laju alarm palsu dan daya, dan $p$ adalah laju dasar. Dengan $p = 0.08$, $\delta = 0.0024$, $z_{\alpha/2} = 1.96$, dan $z_{\beta} = 0.8416$ (daya 80%):
 
 $$
 n \approx \frac{2 \times (2.8016)^2 \times 0.08 \times 0.92}{0.0024^2} = \frac{2 \times 7.849 \times 0.0736}{0.00000576} \approx 200{,}600
 $$
 
-Jadi sekitar 200,600 pengguna per varian, kira-kira dua kali lipat dari yang kita jalankan. Uji hipotetis kita *kurang bertenaga* (*underpowered*) untuk peningkatan relatif 3%, itulah sebabnya hasilnya mendarat di batas. Karena $n$ yang dibutuhkan tumbuh sebesar $1/\delta^2$, menjadikan efek yang ingin dideteksi setengahnya berarti melipatempatkan trafik yang dibutuhkan. Inilah sebabnya perusahaan besar terobsesi pada teknik pengurangan varians, dan mengapa menguji banyak penyesuaian kecil sekaligus membutuhkan kehati-hatian.
+Jadi sekitar 200,600 pengguna per varian, kira-kira dua kali lipat dari yang kita jalankan. Uji hipotetis kita *kurang bertenaga* (*underpowered*) untuk peningkatan relatif 3%, itulah sebabnya hasilnya mendarat di batas. Karena $n$ yang dibutuhkan tumbuh sebesar $1/\delta^2$, menjadikan efek yang ingin dideteksi setengahnya berarti melipatempatkan trafik yang dibutuhkan. Inilah sebabnya perusahaan besar terobsesi pada teknik pengurangan varians (cara membuat metrik kurang berderau sehingga sampel yang lebih kecil sudah cukup), dan mengapa menguji banyak penyesuaian kecil sekaligus membutuhkan kehati-hatian.
 
 ### Monitoring dan drift
 
-Rekomender yang sudah dideploy bisa gagal secara diam-diam. Layanan tetap mengembalikan 200 OK dengan dua puluh item yang diformat sempurna, sementara kualitasnya merosot. Penyebab yang umum:
+Rekomender yang sudah dideploy bisa gagal secara diam-diam. Layanan tetap mengembalikan 200 OK (kode "sukses") dengan dua puluh item yang diformat sempurna, sementara kualitasnya merosot. ***Drift*** berarti dunia atau datanya bergeser menjauh dari apa yang menjadi bahan latihan model. Penyebab yang umum:
 
 - **Data drift:** masukan berubah, misalnya versi aplikasi baru berhenti mengirim `dwell_sec`.
-- **Concept drift:** hubungan fitur-hasil berubah setelah hari libur.
+- **Concept drift:** hubungan fitur-hasil berubah setelah hari libur: masukan yang sama kini menghasilkan perilaku yang berbeda.
 - **Feedback loop:** model hanya belajar tentang item yang pernah ditampilkannya (Bab 12).
 - **Pipeline rusak:** aliran yang terlambat, fitur yang basi, indeks yang tidak dibangun ulang.
 
-Masing-masing punya monitor. Untuk *data drift*, bandingkan distribusi tiap fitur pada satu jam terakhir dengan distribusi pelatihan menggunakan statistik sederhana seperti *population stability index* atau uji Kolmogorov–Smirnov, dan beri peringatan ketika porsi nilai yang hilang berubah. Untuk model, perhatikan distribusi skor prediksi, karena pergeseran mendadak adalah proksi murah untuk masukan yang rusak. Untuk hasil, lacak CTR dan konversi online menurut posisi dan menurut kelompok aktivitas pengguna, seperti yang dilakukan Bab 12 secara *offline*, dan bandingkan dengan **holdout** kecil: beberapa persen pengguna yang selalu menerima baseline sederhana. *Holdout* adalah penggaris jujur Anda, karena ia memberi tahu apakah seluruh rekomender masih mengalahkan popularitas, yang menurut papan peringkat kita selisihnya setidaknya 4x (pop_7d meraih 0.048, pemeringkat 0.215). Terakhir, pantau *kesegaran* itu sendiri: usia *event* terbaru yang terlihat oleh pemeringkat, dan usia indeks. Di repositori ini, padanan peringatan kesegaran adalah membandingkan `max(ts)` di tabel `events` dengan *event* terbaru yang dilihat `Store.refresh`.
+Masing-masing punya monitor. Untuk *data drift*, bandingkan distribusi tiap fitur pada satu jam terakhir dengan distribusi pelatihan. *Population stability index* melakukannya dengan memilah nilai ke dalam kotak-kotak (*bucket*) dan membandingkan berapa banyak yang jatuh ke tiap kotak sekarang dibanding saat pelatihan; angka yang lebih besar berarti perubahan yang lebih besar. Uji Kolmogorov–Smirnov adalah cara lain untuk mengukur seberapa berbeda dua distribusi. Beri peringatan juga ketika porsi nilai yang hilang berubah. Untuk model, perhatikan distribusi skor prediksi, karena pergeseran mendadak adalah proksi murah untuk masukan yang rusak. Untuk hasil, lacak CTR dan konversi online menurut posisi dan menurut kelompok aktivitas pengguna, seperti yang dilakukan Bab 12 secara *offline*, dan bandingkan dengan **holdout** kecil: beberapa persen pengguna yang selalu menerima baseline sederhana. *Holdout* adalah penggaris jujur Anda, seperti rak yang sengaja dibiarkan tidak berubah untuk dibandingkan dengan rak yang didesain ulang. Ia memberi tahu apakah seluruh rekomender masih mengalahkan popularitas, yang menurut papan peringkat kita selisihnya setidaknya 4x (pop_7d meraih 0.048, pemeringkat 0.215). Terakhir, pantau *kesegaran* itu sendiri: usia *event* terbaru yang terlihat oleh pemeringkat, dan usia indeks. Di repositori ini, padanan peringatan kesegaran adalah membandingkan `max(ts)` di tabel `events` dengan *event* terbaru yang dilihat `Store.refresh`.
 
 ### Anggaran latensi
 
-Sebuah permintaan adalah rantai panggilan, sehingga anggaran halaman (katakanlah 300 ms pada p99) dibagi ke seluruh tahap: gateway dan autentikasi, pengambilan fitur pengguna, *retrieval*, perakitan fitur, *ranking*, *re-ranking*, hidrasi, dan jaringan. Tiga prinsip membuat anggaran berjalan. Pertama, **ekor mendominasi**: halaman yang menyebar ke sepuluh layanan selambat layanan yang paling lambat, sehingga p99 lebih penting daripada median. Hasil kita sendiri menunjukkannya pada skala kecil: p50 server 839.9 ms, p99 985.0 ms, maksimum 1010.6 ms. Kedua, **menurun secara anggun alih-alih gagal**: setiap tahap membutuhkan tenggat dan *fallback* yang lebih murah, itulah sebabnya `GET /api/recommendations` mengembalikan daftar popularitas dengan `fallback: true` setelah *timeout* 5 detik. Ketiga, **simpan di *cache* apa yang dibagi**: statistik tingkat item berubah lambat dan dapat dihitung sekali untuk semua pengguna.
+Sebuah permintaan adalah rantai panggilan, dan setiap mata rantai butuh waktu. Anggaran (*budget*) halaman (katakanlah 300 ms pada p99) karena itu dibagi ke seluruh tahap, seperti membagi waktu perjalanan ke tiap etapenya. Istilahnya: **p50** adalah median, waktu yang dikalahkan separuh permintaan. **p99** adalah waktu yang dikalahkan 99 dari 100 permintaan; urutkan 100 waktu permintaan dari yang tercepat dan p99 kira-kira yang ke-99. Ia menggambarkan ekor lambat yang tetap dirasakan pengguna sungguhan. Anggaran ilustratif untuk halaman 300 ms bisa terlihat seperti ini:
+
+| Tahap | Anggaran (ms, ilustratif) |
+|---|---|
+| Gateway dan autentikasi | 20 |
+| Pengambilan fitur pengguna | 20 |
+| *Retrieval* | 60 |
+| Perakitan fitur | 40 |
+| *Ranking* | 80 |
+| *Re-ranking* | 20 |
+| Hidrasi (mengambil judul, gambar, harga) dan jaringan | 60 |
+| **Total** | **300** |
+
+Tiga prinsip membuat anggaran berjalan.
+
+Pertama, **ekor mendominasi**: halaman yang menyebar ke sepuluh layanan selambat layanan yang paling lambat. Jika setiap layanan lambat hanya 1% dari waktu, peluang bahwa *setidaknya satu* dari sepuluh lambat adalah $1 - 0.99^{10} \approx 9.6\%$, hampir satu dari sepuluh halaman. Jadi p99 lebih penting daripada median. Hasil kita sendiri menunjukkannya pada skala kecil: p50 server 839.9 ms, p99 985.0 ms, maksimum 1010.6 ms.
+
+Kedua, **menurun secara anggun alih-alih gagal**: setiap tahap membutuhkan tenggat dan *fallback* yang lebih murah, seperti pelayan yang membawakan roti ketika dapur terlambat, alih-alih membiarkan meja Anda kosong. Itulah sebabnya `GET /api/recommendations` mengembalikan daftar popularitas dengan `fallback: true` setelah *timeout* 5 detik.
+
+Ketiga, **simpan di *cache* apa yang dibagi**. *Cache* adalah jawaban tersimpan yang dipakai ulang alih-alih dihitung ulang, dan **TTL** (*time to live*) adalah berapa lama ia boleh dipakai ulang sebelum dihitung ulang. Bayangkan pemilik toko yang menulis daftar harga hari ini sekali di pagi hari alih-alih menghitung tiap harga untuk tiap pelanggan; daftar itu berlaku sampai daftar besok. Statistik tingkat item berubah lambat dan dapat dihitung sekali untuk semua pengguna. Misalkan (secara hipotetis) 10,000 permintaan tiba per detik dan statistik item disimpan di *cache* dengan TTL 60 detik: satu perhitungan kini melayani sekitar 600,000 permintaan alih-alih 600,000 perhitungan terpisah. Harganya adalah ketinggalan zaman hingga sebesar satu TTL, jadi pilih TTL yang singkat dibandingkan seberapa cepat angkanya benar-benar berubah.
 
 ## Panduan kode: pseudo-code untuk bagian yang belum ada
 
@@ -303,7 +387,7 @@ Tangkapan layar di atas adalah panel "The model" pada `/how-it-works`: versi mod
 Jika Anda ingin melanjutkan proyek ini, berikut daftar periksa berprioritas. Setiap butir cukup kecil untuk dikerjakan dalam satu akhir pekan dan mengajarkan satu gagasan dari bab ini.
 
 1. **Cache frame tingkat item dan saring event per pengguna.** Profil di Bab 13 membagi permintaan menjadi dua biaya: *frame* tingkat item (`item_features`, `covisitation_matrix`) yang dihitung ulang pada setiap panggilan, dan agregasi sisi pengguna atas event semua pengguna padahal hanya satu pengguna yang meminta, yang porsinya lebih besar. Simpan *frame* tingkat item di *cache* dengan TTL singkat, dikunci pada waktu *cache*, dan saring event ke pengguna yang meminta sebelum agregasi sisi pengguna. Ukur setelah setiap bagian; tidak ada yang sendirian menghilangkan biayanya.
-2. **Catat eksposur.** Buat `Recommend` menulis satu baris per item yang ditampilkan (id permintaan, versi model, peringkat, skor, fitur). Latih pada eksposur alih-alih merekonstruksinya, dan gunakan untuk pembobotan *propensity*.
+2. **Catat eksposur.** Buat `Recommend` menulis satu baris per item yang ditampilkan (id permintaan, versi model, peringkat, skor, fitur). Latih pada eksposur alih-alih merekonstruksinya, dan gunakan untuk pembobotan *propensity* (membobot tiap contoh menurut seberapa besar peluangnya ditampilkan).
 3. **Tambahkan holdout dan kerangka A/B mini.** *Hash* `user_id` menjadi *bucket*; kirim 5% ke *fallback* popularitas; catat *bucket* pada setiap *event*; bangun halaman yang menerapkan uji-z dari bab ini pada konversi pesanan.
 4. **Pecah label menjadi beberapa head.** Latih model klik, keranjang, dan pesanan terpisah (tiga model LightGBM sudah cukup), ekspos bobot campuran di konfigurasi, dan bandingkan dengan label bertingkat tunggal.
 5. **Ganti poller dengan antrean.** Minta Rust menerbitkan *event* ke *broker*, dan minta `Store` mengonsumsi darinya. Pertahankan Postgres sebagai *system of record*. Ini langkah jujur terkecil menuju arsitektur *streaming*.
