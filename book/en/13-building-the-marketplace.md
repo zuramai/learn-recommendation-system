@@ -247,12 +247,9 @@ symbol: retrain
 
 The module-level `retrain` function is shared by the service and the CLI (`uv run recsys retrain`). It trains on a snapshot of the store with `end=now`, so the label windows slide forward with the clock: the training set always ends "now minus 14 days to now minus 7 days" and the evaluation window is the last seven days. It converts the evaluation table into flat metric keys such as `lightgbm_ranker/ndcg@20`, writes `ranker.txt` and a `model_meta.json` containing the version, timestamp, metrics and feature importances, and returns the new objects without touching global state.
 
-```include
-path: recommender/recsys/service.py
-symbol: RecommenderService.retrain
 ```
 
-The method wraps the function with two safeguards. First, `retrain_lock.acquire(blocking=False)`: if a retrain is already running, a second request fails immediately with `RuntimeError`, which the RPC maps to `ABORTED` and Rust maps to HTTP `409 retrain already running`. Two simultaneous retrains would waste minutes of CPU and race to write the same files. Second, the swap `self.model, self.meta = model, meta` is two reference assignments. In-flight `Recommend` calls hold their own reference to the old booster (recall the first line of the RPC), so they finish with a consistent model/version pair, and new calls see the new one. No lock on the read path, no pause in traffic.
+`RecommenderService.retrain` wraps the function with two safeguards. First, `retrain_lock.acquire(blocking=False)`: if a retrain is already running, a second request fails immediately with `RuntimeError`, which the RPC maps to `ABORTED` and Rust maps to HTTP `409 retrain already running`. Two simultaneous retrains would waste minutes of CPU and race to write the same files. Second, the swap `self.model, self.meta = model, meta` is two reference assignments. In-flight `Recommend` calls hold their own reference to the old booster (recall the first line of the RPC), so they finish with a consistent model/version pair, and new calls see the new one. No lock on the read path, no pause in traffic.
 
 ::: fact
 **Real-time learning is a research topic of its own.** The Monolith system, from ByteDance, argues that general-purpose training frameworks fall short for recommendation because they separate a batch-training stage from a serving stage, which prevents the model from interacting with customer feedback in real time. Its authors describe an online-training architecture with a collisionless embedding table, and show that reliability can be traded off for real-time learning. Our six-hour retrain interval sits at the opposite, much simpler end of that spectrum.
@@ -275,36 +272,14 @@ The handler reads the user from the cookie, if any (`MaybeUser`), clamps `k`, an
 
 This is the standard contract of a recommender in production: *degraded is better than down*. The route never returns a 5xx just because the model service is unavailable.
 
-### Hydration
+### Hydration, fallback and checkout
 
-```include
-path: backend/src/recommender.rs
-region: hydrate
-```
+gRPC returns ids and scores; the browser needs titles and prices. `hydrate` (in `backend/src/recommender.rs`) runs one SQL query with `id = ANY($1)`, builds a map from id to card, then walks the recommender's list *in the recommender's order*, skipping ids that vanished in the meantime (a seller deactivated a listing a second ago). The response may therefore hold fewer than `k` cards, which is better than failing the whole feed.
 
-gRPC returned ids and scores; the browser needs titles, prices and images. Hydration is one SQL query with `id = ANY($1)` that builds a map from id to card, followed by a pass over the recommender's list *in the recommender's order*. Two design choices are worth naming. The ranking order is owned by the recommender, so hydration uses `filter_map` over the original list rather than the SQL result order. And items that vanished between ranking and display (a seller deactivated a listing in the last second) are skipped, not turned into errors. The response may therefore contain fewer than `k` cards; that is correct behaviour. The alternative of failing the entire request because one product disappeared would make the feed brittle.
+The `fallback` function is the printed card from our restaurant: active, in-stock items ordered by `order` events in the last seven days, then by rating count. It reuses the catalogue's card SQL and labels every row `source: "trending"`, score 0, no contributions, so the frontend needs no separate rendering path. It is deliberately non-personalised: a degraded experience that is the same for everybody cannot be wrong in a surprising, user-specific way.
 
-### The fallback
+The checkout handler (`backend/src/cart.rs`) is the best example of why a single writer pays off. In one transaction it loads the cart, locks the item rows with `SELECT ... FOR UPDATE ORDER BY id` (a deterministic order prevents deadlocks), rejects inactive or short-stock lines with `409`, groups lines by shop into one order per seller, stores `unit_price` at the final discounted price, decrements stock and stamps `out_of_stock_at` at zero, writes one `order` event per line through `touch_session`, and empties the cart. Two recommender-relevant consequences: the next `Recommend` stops proposing a sold-out product because `History.at` reads `out_of_stock_at`, and every `order` event corresponds to a real, paid order row.
 
-```include
-path: backend/src/recommender.rs
-region: fallback
-```
-
-The printed card from our restaurant: active, in-stock items ordered by the number of `order` events in the last seven days, then by rating count. It reuses the same card SQL fragment as the catalogue and gives every row `source: "trending"`, a score of 0 and empty contributions, so the frontend does not need a separate rendering path. The function optionally restricts to one category and excludes one item, which is how the similar-items endpoint falls back when `SimilarItems` fails. The fallback is deliberately *non-personalised*: a degraded experience that is the same for everybody is also the safest, because it cannot be wrong in a surprising, user-specific way.
-
-### Checkout: the transaction that writes the strongest signal
-
-Orders are rare compared to impressions, but they are the label with the highest weight in Chapter 9 and the one that most directly measures what a marketplace cares about. The checkout handler is also the best example in the code base of *why a single writer pays off*.
-
-```include
-path: backend/src/cart.rs
-region: checkout
-```
-
-The shape is a textbook transaction. Load the cart; lock the item rows with `SELECT ... FOR UPDATE` in a deterministic order (`ORDER BY id`, which prevents deadlocks between two shoppers buying overlapping carts); check that every line is active and in stock, otherwise `409 insufficient stock for <title>`; group lines by shop so that a mixed cart produces one order per seller; insert orders and order items at the *final* price (the discount is applied at the moment of purchase and stored as `unit_price`); decrement stock and stamp `out_of_stock_at` when it reaches zero; write one `order` event per line through `touch_session`, with `price_paid` and surface `checkout`; and delete the cart. Commit, or roll everything back.
-
-Two recommender-relevant consequences follow. First, stock changes write `out_of_stock_at`, which is the column `History.at` reads to decide whether an item is in stock at the cutoff, so the very next `Recommend` stops proposing a sold-out product. Second, the `order` event is created only here, never from the browser: the recommender can trust that every `order` in the table corresponds to a real, paid order row.
 
 ## The contract between languages: one `.proto`, two code generators
 
@@ -379,63 +354,35 @@ Second, **0.84 s is fine for a demo and too slow for a real home page**. The Rus
 
 ### A screenshot tour
 
-The remaining figures are screenshots of the running application, captured with Playwright against the same seeded database. We use them to connect each page to the code you just read.
-
-**Logging in.** The demo accounts are shown on the login page so a reader can start in seconds. Authentication is an email and password; the API verifies an Argon2 hash and answers with a JWT in an `httpOnly`, `SameSite=Lax` cookie, so the JavaScript never sees the token and the same-origin proxy from Vite keeps the cookie on `localhost:5173`.
-
-![The login page with the demo credentials hint](../assets/screenshots/login.png)
-
-**The anonymous home page.** With no cookie, `Recommend` is called with `user_id = 0`. The heading says "Popular now", and the grey caption gives the model version, 30 candidates and the latency. No impressions are recorded because the tracker returns early when there is no user.
-
-![Home page for an anonymous visitor: "Popular now" with the model caption](../assets/screenshots/home-anon.png)
-
-**The personalised home page.** Logged in as `user43`, the same URL now says "Recommended for you", the caption reports more candidates (the retrievers have history to work with) and the feed is dominated by baby products and make-up, consistent with the user's category affinities. Each card has "Why this?" and "Not interested" links; the latter tracks a `hide` event, which the recommender uses both as a negative feature and as a hard filter.
-
-![Home page for user43: personalised feed with Why this? and Not interested on each card](../assets/screenshots/home-user.png)
-
-**Why this?** Opening the panel on the first card shows "Because: you viewed it", the score and rank, and five features with their values and signed contributions: a repeat-purchase category, long dwell, previous orders, a high share of the user's clicks in this category. The names come from `schema.FEATURES` through `ModelInfo`, and the bars are the SHAP values that `ranker.contributions` computed inside `recommend_rpc`. The panel makes the system *inspectable*, which is invaluable when debugging a recommender: if a card appears for a reason that makes no sense, the panel tells you which feature to investigate.
-
-![The Why this? panel on the first recommendation, with the source, score, rank and five feature contributions](../assets/screenshots/why-this.png)
-
-**Search and product pages.** Search is a plain SQL `ILIKE` over titles and category names with sort options, not a recommender, but it generates the `search` surface and the `searches` rows that the personalisation uses. The product page loads the detail and, separately, `/products/:id/similar`, which calls `SimilarItems`: co-visited items first, then same-category popular ones. Notice the layout: product details load first, and "Similar items" is optional; if it fails, the page still works.
-
-![Search results for "coffee" with a sort selector](../assets/screenshots/search.png)
+The screenshots below come from the running application, captured with Playwright against the same seeded database. The other pages follow the same pattern: login verifies an Argon2 hash and sets a JWT in an `httpOnly` cookie; search is plain SQL `ILIKE` that writes `searches` rows; the product page loads its detail and `/products/:id/similar` separately, so a failing recommender never blocks the page; cart, checkout and orders exercise the writer side; the Seller Center shows a seller's products and the paid orders they must ship, and a freshly listed product there is the cold-start case of Chapter 12.
 
 ![A product page with an Add to cart button and a grid of similar items](../assets/screenshots/product-similar.png)
 
-**Cart, checkout and orders.** These pages exercise the writer side. Adding to the cart writes a row and an `add_to_cart` event; placing the order runs the transaction above; the orders page lists one order per shop with a `paid` status badge.
-
 ![The shopping cart with one line, subtotal, shipping and a Checkout button](../assets/screenshots/cart.png)
 
-![The checkout page: a shipping address box and a Place order button, with a note that payment is simulated](../assets/screenshots/checkout.png)
+![The orders page listing paid orders with line items and totals](../assets/screenshots/orders.png)
 
-![The orders page listing three paid orders with line items and totals](../assets/screenshots/orders.png)
+![Seller Center, Orders tab: paid orders with Mark shipped buttons](../assets/screenshots/seller-orders.png)
 
-**The seller side.** A seller sees their products with stock and status, a form to create a listing, and the orders that buyers placed. The list of orders contains exactly the orders created a moment ago in checkout, with the buyer's name and a "Mark shipped" button; the API accepts only `paid → shipped` and `shipped → completed`. A newly created product starts with no impressions and no interactions: the cold-start problem of Chapter 12 in its purest form.
+**The personalised home page.** Logged in as `user43`, "Recommended for you" shows a caption with model version, candidate count and latency, and each card has "Why this?" and "Not interested" (which tracks a `hide` event). An anonymous visitor gets "Popular now" from `user_id = 0`, with no tracking.
 
-![Seller Center, Products tab: a table of the shop's products and a New product form](../assets/screenshots/seller-products.png)
+![Home page for user43: a personalised feed with Why this? and Not interested on each card](../assets/screenshots/home-user.png)
 
-![Seller Center, Orders tab: two paid orders from Demo User 43 with Mark shipped buttons](../assets/screenshots/seller-orders.png)
+**Why this?** The panel shows "Because: you viewed it", the score and rank, and five features with their signed contributions. The names come from `schema.FEATURES` via `ModelInfo`; the bars are the SHAP values computed inside `recommend_rpc`. If a card appears for a reason that makes no sense, the panel tells you which feature to investigate.
 
-**The learning pages.** "How it works" has a live view of the user's own behaviour. The screenshot below is the events table captured partway down the page: the newest rows at the top are an `order` from checkout, then a `click` with a dwell of 1.8 seconds from the search surface, a long run of `similar` impressions at positions 0 to 11, and an `add_to_cart`. The searches on the right are the last ten queries. This is the same table the recommender reads.
+![The Why this? panel on the first recommendation](../assets/screenshots/why-this.png)
 
-![The live events table on the How it works page: order, click with dwell, impressions by surface and position, and recent searches](../assets/screenshots/how-it-works-events.png)
+**The model page.** "How it works" shows the live event table (the same rows the recommender reads), then the model section: version, events loaded, the metric table for the four methods, candidate recall and the top features by gain, with `ui_max_dwell_sec` first. Admins also get a "Retrain now" button; after a retrain the version, metrics and training-row count differ slightly even though no code changed, because every cutoff is relative to `now` and the label windows slide with the clock.
 
-![The model section of the How it works page: version, events loaded, metrics for each method, candidate recall and the top features by gain share](../assets/screenshots/how-it-works-model.png)
+![The model section of the How it works page: version, metrics per method, candidate recall and top features](../assets/screenshots/how-it-works-model.png)
 
-The model section shows the version, when it was trained, how many events were loaded, the metric table for the four methods and the top features by gain. The numbers are the same ones you computed offline in Chapters 3 and 10: the heuristic blend scores far above global popularity and the LightGBM ranker above the blend, with `ui_max_dwell_sec` as the single most important feature.
+![The live events table on the How it works page: order, click with dwell, impressions by surface and position](../assets/screenshots/how-it-works-events.png)
 
-Admins also get a "Retrain now" button. After clicking it, the page lists the new model's version and every metric key returned by gRPC.
+![The admin retrain panel: new model version, rows trained on and metrics](../assets/screenshots/admin-retrain.png)
 
-![The admin retrain panel: the new model version, rows trained on and the metrics table](../assets/screenshots/admin-retrain.png)
+**Degraded mode.** With the recommender stopped, the yellow banner replaces the model caption, cards come from the fallback query, and the "Why this?" panels are empty because trending items have no contributions. The user is slightly worse off; nobody is locked out.
 
-Compare this screenshot with the model section above. The retrained model has a different version and slightly different metrics and training-row counts, even though no code changed. Why? Because every cutoff is defined relative to `now`: when the clock moves forward and new events arrive, the label windows slide and the training set changes. This is normal, and it is why the model version is part of every response.
-
-**Degraded mode.** Finally, the screenshot taken with the recommender stopped.
-
-![Home page with the yellow "Recommender offline — showing popular items" banner](../assets/screenshots/fallback-banner.png)
-
-The page is still a working shop: the yellow banner replaced the model caption, the cards come from the fallback query and "Why this?" panels are empty because trending items have no contributions. The user is slightly worse off; nobody is locked out.
+![Home page with the yellow "Recommender offline" banner](../assets/screenshots/fallback-banner.png)
 
 ## Pitfalls and production practice
 
