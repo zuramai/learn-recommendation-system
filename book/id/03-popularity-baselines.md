@@ -19,10 +19,10 @@ Bayangkan toko buku di lingkungan rumah Anda. Saat Anda pertama kali masuk, pemi
 Sekarang perhatikan apa yang ditambahkan seorang pemilik toko yang cerdik seiring waktu.
 
 1. **Ia melupakan secara perlahan.** Buku yang terjual 500 eksemplar tahun lalu tetapi hanya dua minggu lalu tidak lagi ada di meja. Itulah *peluruhan waktu* (*time decay*): penjualan terbaru dihitung lebih besar daripada yang lama. Toko yang tidak pernah lupa akhirnya menghias meja depannya dengan hit musim lalu.
-2. **Ia tidak mempercayai sampel kecil.** Buku dengan skor bintang lima sempurna dari satu pengulas, sepupu sang penulis, tidak boleh mengalahkan buku dengan 4,7 bintang dari dua ribu pembaca. Itulah *shrinkage*, atau rata-rata Bayesian: ketika bukti tipis, bersandarlah pada apa yang kita ketahui tentang buku secara umum.
+2. **Ia tidak mempercayai sampel kecil.** Buku dengan skor bintang lima sempurna dari satu pengulas, sepupu sang penulis, tidak boleh mengalahkan buku dengan 4.7 bintang dari dua ribu pembaca. Itulah *shrinkage*, atau rata-rata Bayesian: ketika bukti tipis, bersandarlah pada apa yang kita ketahui tentang buku secara umum.
 3. **Ia memperhatikan siapa Anda.** Begitu Anda bilang suka memasak, ia mengantar Anda ke rak buku resep, dan *di sana* ia kembali menunjuk buku terlaris. Ia tidak memakai model canggih tentang selera Anda; ia hanya mengiriskan "apa yang Anda suka" dengan "apa yang populer". Itulah **popularitas yang dipersonalisasi** (*personalised popularity*), dan itu jembatan dari bab ini ke sisa buku.
 
-Setiap langkah itu punya bentuk numerik yang presisi. Tidak satu pun membutuhkan lebih dari `groupby` pandas. Namun, seperti yang akan kita lihat pada hasilnya, langkah ketiga saja menghasilkan skor 2,5 kali lebih tinggi daripada tabel terlaris biasa.
+Setiap langkah itu punya bentuk numerik yang presisi. Tidak satu pun membutuhkan lebih dari `groupby` pandas. Namun, seperti yang akan kita lihat pada hasilnya, langkah ketiga saja menghasilkan skor 2.5 kali lebih tinggi daripada tabel terlaris biasa.
 
 ```mermaid
 flowchart TD
@@ -69,7 +69,7 @@ $$
 \text{pop}_W(i) = \sum_{e \,:\, \text{item}(e)=i,\; a_e < W} w_e .
 $$
 
-Dengan $W=7$ inilah daftar "tren minggu ini", dan persis itulah yang dihitung `candidates.item_popularity(hist, 7)`. Jendela adalah alat yang kasar: event berusia 6,9 hari dihitung penuh, event berusia 7,1 hari tidak dihitung sama sekali. Ada pula harga statistiknya. Event yang lebih sedikit berarti hitungan yang lebih berisik: jika sebuah item terjual sepuluh unit seminggu, hitungan mingguannya naik-turun cukup besar hanya karena kebetulan.
+Dengan $W=7$ inilah daftar "tren minggu ini", dan persis itulah yang dihitung `candidates.item_popularity(hist, 7)`. Jendela adalah alat yang kasar: event berusia 6.9 hari dihitung penuh, event berusia 7.1 hari tidak dihitung sama sekali. Ada pula harga statistiknya. Event yang lebih sedikit berarti hitungan yang lebih berisik: jika sebuah item terjual sepuluh unit seminggu, hitungan mingguannya naik-turun cukup besar hanya karena kebetulan.
 
 ### Metode 3: Peluruhan waktu eksponensial
 
@@ -79,17 +79,17 @@ $$
 d(a) = 2^{-a/h} = e^{-\lambda a}, \qquad \lambda = \frac{\ln 2}{h}.
 $$
 
-Kedua bentuk itu adalah fungsi yang sama. Yang pertama lebih mudah dinalar (setiap $h$ hari bobotnya separuh); yang kedua adalah bentuk yang disukai kalkulus. Dengan $h = 7$ hari, yaitu `HALF_LIFE_DAYS` di repositori, kita mendapat $\lambda = 0{,}693/7 \approx 0{,}099$ per hari. Popularitas terluruh (*decayed*) adalah
+Kedua bentuk itu adalah fungsi yang sama. Yang pertama lebih mudah dinalar (setiap $h$ hari bobotnya separuh); yang kedua adalah bentuk yang disukai kalkulus. Dengan $h = 7$ hari, yaitu `HALF_LIFE_DAYS` di repositori, kita mendapat $\lambda = 0.693/7 \approx 0.099$ per hari. Popularitas terluruh (*decayed*) adalah
 
 $$
 \text{pop}_{\text{decay}}(i) = \sum_{e \,:\, \text{item}(e)=i} w_e \cdot 2^{-a_e/h}.
 $$
 
-Mari kita periksa bahwa bentuknya sesuai klaim kita. Pada usia 0 bobotnya 1. Pada usia 7 bobotnya $2^{-1} = 0{,}5$. Pada 14 menjadi $2^{-2} = 0{,}25$, pada 21 menjadi $0{,}125$. Setelah sebulan sekitar 5%, dan event dari awal riwayat nyaris tidak bernilai. Skrip mencetak angka-angka ini, dan grafik memplotnya.
+Mari kita periksa bahwa bentuknya sesuai klaim kita. Pada usia 0 bobotnya 1. Pada usia 7 bobotnya $2^{-1} = 0.5$. Pada 14 menjadi $2^{-2} = 0.25$, pada 21 menjadi $0.125$. Setelah sebulan sekitar 5%, dan event dari awal riwayat nyaris tidak bernilai. Skrip mencetak angka-angka ini, dan grafik memplotnya.
 
-![Peluruhan eksponensial dengan half-life 7 hari: bobot separuh setiap tujuh hari, dari 1 pada usia nol menjadi 0,5, 0,25, dan 0,125 pada usia 7, 14, dan 21.](../assets/charts/ch03-decay-curve.png)
+![Peluruhan eksponensial dengan half-life 7 hari: bobot separuh setiap tujuh hari, dari 1 pada usia nol menjadi 0.5, 0.25, dan 0.125 pada usia 7, 14, dan 21.](../assets/charts/ch03-decay-curve.png)
 
-Peluruhan eksponensial menjadi bawaan produksi karena tiga alasan. Ia **tak bermemori** (*memoryless*): nilai relatif hanya bergantung pada selang antar event, sehingga penilaian ulang esok hari tidak mengubah peringkat. Ia **bisa diperbarui secara inkremental**: simpan satu angka $S$ per item dan atur $S \leftarrow S\cdot 2^{-(t-t_{\text{last}})/h} + w$ pada setiap event, satu perkalian dan satu penjumlahan. Dan ia punya **satu kenop yang intuitif**: agar sebuah event bernilai 10% setelah 30 hari, selesaikan $2^{-30/h}=0{,}1$, sehingga $h = 30\ln 2/\ln 10 \approx 9{,}0$ hari.
+Peluruhan eksponensial menjadi bawaan produksi karena tiga alasan. Ia **tak bermemori** (*memoryless*): nilai relatif hanya bergantung pada selang antar event, sehingga penilaian ulang esok hari tidak mengubah peringkat. Ia **bisa diperbarui secara inkremental**: simpan satu angka $S$ per item dan atur $S \leftarrow S\cdot 2^{-(t-t_{\text{last}})/h} + w$ pada setiap event, satu perkalian dan satu penjumlahan. Dan ia punya **satu kenop yang intuitif**: agar sebuah event bernilai 10% setelah 30 hari, selesaikan $2^{-30/h}=0.1$, sehingga $h = 30\ln 2/\ln 10 \approx 9.0$ hari.
 
 ### Contoh hitungan kecil
 
@@ -105,7 +105,7 @@ Metode sepanjang waktu memilih B karena ia tidak pernah lupa. Jendela 7 hari mem
 
 ### Metode 4: Rata-rata Bayesian (tidak mempercayai sampel kecil)
 
-Sejauh ini kita meranking berdasarkan *permintaan*. Sinyal populer lainnya adalah *kualitas*: rata-rata rating bintang. Tetapi rata-rata bisa berbohong saat sampelnya kecil. Produk dengan satu rating bintang 5 punya rata-rata 5,0, lebih tinggi daripada produk terlaris dengan 4,8 dari ribuan pembeli. Kita menginginkan skor yang dimulai dari rata-rata *global* ketika tidak ada bukti, lalu perlahan bergeser ke rata-rata item itu sendiri seiring bukti menumpuk.
+Sejauh ini kita meranking berdasarkan *permintaan*. Sinyal populer lainnya adalah *kualitas*: rata-rata rating bintang. Tetapi rata-rata bisa berbohong saat sampelnya kecil. Produk dengan satu rating bintang 5 punya rata-rata 5.0, lebih tinggi daripada produk terlaris dengan 4.8 dari ribuan pembeli. Kita menginginkan skor yang dimulai dari rata-rata *global* ketika tidak ada bukti, lalu perlahan bergeser ke rata-rata item itu sendiri seiring bukti menumpuk.
 
 Misalkan $R$ adalah rating rata-rata sebuah item, $v$ jumlah ratingnya, $C$ rating rata-rata semua item, dan $m$ **kekuatan prior** (*prior strength*): berapa banyak rating "bukti khayalan" pada rata-rata global yang kita tambahkan. Rata-rata Bayesian adalah
 
@@ -123,16 +123,16 @@ $$
 
 Dengan kata lain: *anggaplah setiap item menerima $m$ rating tambahan, semuanya sama dengan rata-rata global.* Bentuk umum "(pembilang + prior × kekuatan) ÷ (penyebut + kekuatan)" berlaku untuk rasio apa pun, bukan hanya rating bintang. *Click-through rate* adalah klik ÷ impresi, konversi adalah pesanan ÷ klik, tingkat retur adalah retur ÷ pesanan. Repositori membungkusnya dalam satu fungsi kecil, `features._smoothed`, dan memakainya berkali-kali di Bab 9.
 
-Berikut pemeriksaan dengan angka kecil. Sebuah item punya $v = 20$ rating dengan rata-rata $R = 4{,}8$. Rata-rata global $C = 4{,}0$ dan kekuatan prior $m = 100$. Maka
+Berikut pemeriksaan dengan angka kecil. Sebuah item punya $v = 20$ rating dengan rata-rata $R = 4.8$. Rata-rata global $C = 4.0$ dan kekuatan prior $m = 100$. Maka
 
 $$
 \text{WR} = \tfrac{20}{120}\cdot 4.8 + \tfrac{100}{120}\cdot 4.0 = 0.8 + 3.33 = 4.13 .
 $$
 
-Item itu tampak bagus (4,8), tetapi dua puluh rating belum banyak, sehingga estimasinya tetap dekat dengan prior. Aritmetika yang sama berlaku pada tingkat konversi: 3 klik dari 10 impresi (30% mentah) dengan CTR global 5% dan kekuatan 50 di-*smooth* menjadi $(3+2{,}5)/60 = 9{,}2\%$, sedangkan 50 klik dari 1.000 impresi tetap di 5,0%. Sampel kecil dikerutkan keras; sampel besar nyaris tak bergeser.
+Item itu tampak bagus (4.8), tetapi dua puluh rating belum banyak, sehingga estimasinya tetap dekat dengan prior. Aritmetika yang sama berlaku pada tingkat konversi: 3 klik dari 10 impresi (30% mentah) dengan CTR global 5% dan kekuatan 50 di-*smooth* menjadi $(3+2.5)/60 = 9.2\%$, sedangkan 50 klik dari 1,000 impresi tetap di 5.0%. Sampel kecil dikerutkan keras; sampel besar nyaris tak bergeser.
 
 ::: fact
-**"Top 250" adalah rata-rata Bayesian.** IMDb secara terbuka mendokumentasikan rumus yang dipakainya untuk meranking Top 250 film: weighted rating = (v ÷ (v+m)) × R + (m ÷ (v+m)) × C, dengan R adalah rating rata-rata judul tersebut, v jumlah ratingnya, m jumlah rating minimum agar dapat masuk daftar (saat ini 25.000), dan C rating rata-rata di seluruh judul. IMDb sendiri menyebutnya "a true Bayesian estimate". Itu persis rumus di bagian ini.
+**"Top 250" adalah rata-rata Bayesian.** IMDb secara terbuka mendokumentasikan rumus yang dipakainya untuk meranking Top 250 film: weighted rating = (v ÷ (v+m)) × R + (m ÷ (v+m)) × C, dengan R adalah rating rata-rata judul tersebut, v jumlah ratingnya, m jumlah rating minimum agar dapat masuk daftar (saat ini 25,000), dan C rating rata-rata di seluruh judul. IMDb sendiri menyebutnya "a true Bayesian estimate". Itu persis rumus di bagian ini.
 
 Sumber: IMDb, IMDb Help Center, 2026
 :::
@@ -156,7 +156,7 @@ $$
 
 Mengapa dinormalisasi dalam kategori? Tanpa itu, kategori besar seperti Camilan akan menenggelamkan yang lain. Dengan normalisasi, setiap kategori punya "langit-langit" yang sama, dan afinitas pengguna menentukan *bintang dari kategori mana* yang muncul. Suku tambahan kecil (sepersejuta dari popularitas global) memecah seri dan memberi pengguna *tanpa* riwayat, yang afinitasnya nol semua, daftar `pop_7d` biasa sebagai *fallback*.
 
-Contoh hitungan: Sari menghabiskan 60% aktivitasnya pada Makanan Kucing, 30% pada Mainan Anjing, dan 10% pada Perawatan Kulit. Item makanan kucing terbaik bernilai $0{,}6\times1=0{,}6$, runner-up dengan 80% popularitasnya bernilai $0{,}48$, mainan anjing terbaik $0{,}3$, item perawatan kulit terbaik hanya $0{,}1$. Feed-nya sebagian besar berisi item hewan peliharaan, diurutkan menurut popularitas dalam setiap rak.
+Contoh hitungan: Sari menghabiskan 60% aktivitasnya pada Makanan Kucing, 30% pada Mainan Anjing, dan 10% pada Perawatan Kulit. Item makanan kucing terbaik bernilai $0.6\times1=0.6$, runner-up dengan 80% popularitasnya bernilai $0.48$, mainan anjing terbaik $0.3$, item perawatan kulit terbaik hanya $0.1$. Feed-nya sebagian besar berisi item hewan peliharaan, diurutkan menurut popularitas dalam setiap rak.
 
 ::: fact
 **Bias popularitas bukan bug pada implementasi Anda; ia adalah sifat sistem rekomendasi yang terdokumentasi.** Abdollahpouri dan rekan-rekannya menunjukkan pada dataset film bahwa banyak algoritma rekomendasi memusatkan keluarannya pada item populer, bahkan untuk pengguna yang seleranya kebanyakan niche, dan mereka mengukurnya sebagai "bias disparity" antara apa yang pengguna inginkan dan apa yang mereka dapatkan.
@@ -283,7 +283,7 @@ Skrip juga menulis `results/ch03_popularity.json`, yang dibaca skrip figur untuk
 
 ### Membaca kurva peluruhan
 
-Kurva peluruhan pada Gambar 3.2 mengonfirmasi aritmetikanya. Bobot yang tercetak sesuai dengannya: 0,9057 setelah satu hari, 0,7430 setelah tiga, tepat 0,5000 setelah tujuh, 0,2500 setelah empat belas, dan 0,1250 setelah dua puluh satu. Pada titik 30 hari bobotnya sudah turun menjadi 0,0513, dan event berusia 53 hari, yang tertua dalam riwayat ini, hanya bernilai 0,0053 dari event baru. Artinya, untuk keperluan peringkat, peluruhan dengan half-life satu minggu berperilaku seperti jendela lunak sekitar dua hingga tiga minggu.
+Kurva peluruhan pada Gambar 3.2 mengonfirmasi aritmetikanya. Bobot yang tercetak sesuai dengannya: 0.9057 setelah satu hari, 0.7430 setelah tiga, tepat 0.5000 setelah tujuh, 0.2500 setelah empat belas, dan 0.1250 setelah dua puluh satu. Pada titik 30 hari bobotnya sudah turun menjadi 0.0513, dan event berusia 53 hari, yang tertua dalam riwayat ini, hanya bernilai 0.0053 dari event baru. Artinya, untuk keperluan peringkat, peluruhan dengan half-life satu minggu berperilaku seperti jendela lunak sekitar dua hingga tiga minggu.
 
 ### Papan peringkat
 
@@ -291,23 +291,23 @@ Kurva peluruhan pada Gambar 3.2 mengonfirmasi aritmetikanya. Bobot yang tercetak
 
 Bacalah tabel utama baris demi baris. Kita berfokus pada ndcg@20 (satu angka yang memberi ganjaran bagi penempatan hit di dekat puncak) dan recall@20 (berapa banyak interaksi *held-out* pengguna yang kita temukan dalam 20 slot).
 
-**Acak adalah lantainya.** `random` mencapai ndcg@20 sebesar 0,0035 dan recall@20 sebesar 0,0090. Tidak ada yang di bab ini boleh berskor lebih rendah, dan apa pun yang begitu pasti rusak. Cakupannya 1,0000: setiap item direkomendasikan kepada seseorang. Kita akan kembali pada keanehan bahwa metode *terburuk* punya cakupan *terbaik*.
+**Acak adalah lantainya.** `random` mencapai ndcg@20 sebesar 0.0035 dan recall@20 sebesar 0.0090. Tidak ada yang di bab ini boleh berskor lebih rendah, dan apa pun yang begitu pasti rusak. Cakupannya 1.0000: setiap item direkomendasikan kepada seseorang. Kita akan kembali pada keanehan bahwa metode *terburuk* punya cakupan *terbaik*.
 
-**Popularitas global sudah sekitar empat belas hingga lima belas kali lebih baik daripada acak dalam ndcg@20.** `pop_all_time` berskor ndcg@20 0,0527 dan recall@20 0,0914, `pop_7d` berskor 0,0475 dan 0,0786, dan `pop_decay` berada di antaranya dengan 0,0491 dan 0,0813. Selisih antara acak dan metode masuk akal yang paling murah jauh lebih besar daripada selisih antar metode masuk akal itu sendiri. Sebagian besar nilai "mudah" yang dapat dicapai terletak pada sekadar mengetahui item mana yang diinginkan orang.
+**Popularitas global sudah sekitar empat belas hingga lima belas kali lebih baik daripada acak dalam ndcg@20.** `pop_all_time` berskor ndcg@20 0.0527 dan recall@20 0.0914, `pop_7d` berskor 0.0475 dan 0.0786, dan `pop_decay` berada di antaranya dengan 0.0491 dan 0.0813. Selisih antara acak dan metode masuk akal yang paling murah jauh lebih besar daripada selisih antar metode masuk akal itu sendiri. Sebagian besar nilai "mudah" yang dapat dicapai terletak pada sekadar mengetahui item mana yang diinginkan orang.
 
 **Sepanjang waktu sedikit mengalahkan jendela 7 hari, kebalikan dari yang disarankan intuisi.** Banyak praktisi mengira "trending" akan menang. Di sini tidak, dan alasannya adalah sifat *data ini*: dalam simulator, setiap item punya kualitas tersembunyi yang tetap, sehingga kualitas tersembunyi sebuah item tidak berubah dan item yang populer sebulan lalu masih populer. Di bawah popularitas yang stabil, riwayat lebih panjang berarti lebih sedikit derau, dan hitungan 53 hari adalah estimasi yang lebih baik atas angka dasar yang sama daripada hitungan satu minggu. Varian peluruhan berada di antara keduanya karena alasan yang sama: jendela efektifnya lebih panjang dari tujuh hari namun tetap memberi bobot lebih kecil pada yang lama.
 
-Pada *cut-off* yang lebih dalam, daftar terluruh jauh lebih dekat dengan daftar sepanjang waktu (recall@50 adalah 0,1557 berbanding 0,1575, sementara jendela keras turun ke 0,1335): lereng yang mulus mempertahankan ekor panjang bukti yang dibuang oleh tebing.
+Pada *cut-off* yang lebih dalam, daftar terluruh jauh lebih dekat dengan daftar sepanjang waktu (recall@50 adalah 0.1557 berbanding 0.1575, sementara jendela keras turun ke 0.1335): lereng yang mulus mempertahankan ekor panjang bukti yang dibuang oleh tebing.
 
 ::: warning
 Jangan menganggap "sepanjang waktu mengalahkan 7 hari" sebagai hukum alam. Itu hanya mengatakan bahwa katalog *simulasi* memiliki popularitas yang stasioner. Di marketplace sungguhan, *flash sale*, produk viral, dan kategori musiman (Ramadan, 9.9, 11.11) membuat popularitas bergeser, dan daftar berjendela atau terluruh biasanya menang. Pelajarannya: **ukur pada data Anda sendiri**, dan perlakukan jendela atau half-life sebagai hiperparameter yang disetel pada minggu validasi.
 :::
 
-**Kualitas bukan permintaan.** `bayesian_rating` punya ndcg@20 0,0325 dan recall@20 0,0648: sekitar sembilan kali lebih baik dari acak, tetapi lebih buruk daripada setiap metode berbasis permintaan. Pada baris-baris contoh, item 892 (tertulis 4,4, nol rating) bernilai 4,324, rata-rata global $C$; item 1840 (4,4, 34 rating) bergeser sedikit ke 4,343; item 610 (5,0, 2718 rating) berakhir di 4,975 karena bukti menenggelamkan prior ($m = 105{,}2$). *Shrinkage* bekerja sesuai rancangan, tetapi rating bagus bukan alasan untuk mengklik: produk niche berating tinggi hanya penting bagi segelintir orang yang membutuhkannya. Pakai rating Bayesian sebagai fitur atau rak "top rated", bukan sebagai *ranker* home feed.
+**Kualitas bukan permintaan.** `bayesian_rating` punya ndcg@20 0.0325 dan recall@20 0.0648: sekitar sembilan kali lebih baik dari acak, tetapi lebih buruk daripada setiap metode berbasis permintaan. Pada baris-baris contoh, item 892 (tertulis 4.4, nol rating) bernilai 4.324, rata-rata global $C$; item 1840 (4.4, 34 rating) bergeser sedikit ke 4.343; item 610 (5.0, 2718 rating) berakhir di 4.975 karena bukti menenggelamkan prior ($m = 105.2$). *Shrinkage* bekerja sesuai rancangan, tetapi rating bagus bukan alasan untuk mengklik: produk niche berating tinggi hanya penting bagi segelintir orang yang membutuhkannya. Pakai rating Bayesian sebagai fitur atau rak "top rated", bukan sebagai *ranker* home feed.
 
-Patut pula diperhatikan *placeholder* yang bersembunyi di data mentah. Baris pertama yang tercetak punya `rating_avg` 4,5 dengan nol rating: nilai bawaan yang ditulis ke setiap item baru. Tanpa *smoothing*, setiap item tanpa rating akan membawa 4,5 fiktif, yang tampak *lebih baik* daripada kebanyakan produk nyata. Rata-rata Bayesian memperbaikinya secara diam-diam dengan memperlakukan nol rating sebagai "tidak ada informasi".
+Patut pula diperhatikan *placeholder* yang bersembunyi di data mentah. Baris pertama yang tercetak punya `rating_avg` 4.5 dengan nol rating: nilai bawaan yang ditulis ke setiap item baru. Tanpa *smoothing*, setiap item tanpa rating akan membawa 4.5 fiktif, yang tampak *lebih baik* daripada kebanyakan produk nyata. Rata-rata Bayesian memperbaikinya secara diam-diam dengan memperlakukan nol rating sebagai "tidak ada informasi".
 
-**Sedikit personalisasi berdampak besar.** `pop_in_my_categories` mencapai ndcg@20 sebesar 0,1302 dan recall@20 sebesar 0,2173. Dibanding daftar global terbaik, itu faktor sekitar 2,5 pada ndcg, dan recall@50 naik ke 0,3529 berbanding 0,1575. Order recall@20, yang hanya menghitung *pesanan* held-out (sinyal terkuat), adalah 0,3050 berbanding 0,1202. Kita tidak melatih apa pun. Satu-satunya informasi baru adalah "kategori apa yang disentuh pengguna ini", dan itu memindahkan metrik dari "biasa saja" ke "lumayan". Inilah angka terpenting bab ini: *mengetahui bahkan preferensi pengguna yang kasar lebih berarti daripada perbaikan sebanyak apa pun pada daftar global.*
+**Sedikit personalisasi berdampak besar.** `pop_in_my_categories` mencapai ndcg@20 sebesar 0.1302 dan recall@20 sebesar 0.2173. Dibanding daftar global terbaik, itu faktor sekitar 2.5 pada ndcg, dan recall@50 naik ke 0.3529 berbanding 0.1575. Order recall@20, yang hanya menghitung *pesanan* held-out (sinyal terkuat), adalah 0.3050 berbanding 0.1202. Kita tidak melatih apa pun. Satu-satunya informasi baru adalah "kategori apa yang disentuh pengguna ini", dan itu memindahkan metrik dari "biasa saja" ke "lumayan". Inilah angka terpenting bab ini: *mengetahui bahkan preferensi pengguna yang kasar lebih berarti daripada perbaikan sebanyak apa pun pada daftar global.*
 
 Perhatikan 21 pengguna evaluasi, dari 947, yang sama sekali tidak punya sinyal kategori dan jatuh kembali ke `pop_7d` biasa. Itu sekitar 2% pengguna, dan *fallback* itu berarti mereka tetap mendapat halaman yang masuk akal alih-alih kosong: degradasi yang anggun (*graceful degradation*) yang sama yang diandalkan sistem produksi ketika pengunjung baru tiba.
 
@@ -319,7 +319,7 @@ Masalah terpenting bukanlah akurasi, melainkan **lingkaran umpan balik** (*feedb
 
 Lingkarannya sederhana: eksposur menghasilkan klik, klik menghasilkan skor, dan skor menentukan eksposur, sehingga item di luar daftar tidak bisa masuk.
 
-Tabel memperlihatkannya. Ketiga metode global semuanya punya coverage@20 sebesar 0,0087: di antara 947 pengguna, mereka merekomendasikan *dua puluh item yang sama*. Metode yang dipersonalisasi, pada 0,2164, menyentuh sekitar dua puluh lima kali lebih banyak item berbeda, dan acak, pada 1,0000, menyentuh semuanya.
+Tabel memperlihatkannya. Ketiga metode global semuanya punya coverage@20 sebesar 0.0087: di antara 947 pengguna, mereka merekomendasikan *dua puluh item yang sama*. Metode yang dipersonalisasi, pada 0.2164, menyentuh sekitar dua puluh lima kali lebih banyak item berbeda, dan acak, pada 1.0000, menyentuh semuanya.
 
 Sistem produksi menanganinya berlapis-lapis; tidak ada yang menjadi tugas *baseline*, tetapi semuanya dibangun di atasnya:
 
@@ -348,8 +348,8 @@ Di repositori ini *baseline* bertahan dalam tiga peran: **fallback** (*retriever
 - Rata-rata Bayesian $\frac{v}{v+m}R + \frac{m}{v+m}C$ mengerutkan sampel kecil ke rata-rata global. Repositori menggeneralisasinya sebagai `_smoothed(num, den, prior, strength)` untuk CTR, konversi, dan tingkat retur.
 - Pada data ini popularitas sepanjang waktu sedikit mengalahkan jendela 7 hari, karena popularitas simulasi stabil. Jendela mana yang menang bergantung pada seberapa cepat popularitas nyata bergeser, jadi setel pada data *held-out*.
 - Meranking berdasarkan rating saja kalah dari meranking berdasarkan permintaan: kualitas tidak sama dengan relevansi.
-- Mengalikan afinitas kategori dengan popularitas dalam kategori menaikkan ndcg@20 dari sekitar 0,05 menjadi 0,13 tanpa pelatihan model, argumen paling jelas untuk personalisasi.
-- Popularitas global memberi setiap pengguna beberapa item yang sama (cakupan 0,0087) dan menyuapi lingkaran yang memperkuat dirinya sendiri; bab-bab berikutnya menambahkan personalisasi, eksplorasi, dan diversitas untuk melawannya.
+- Mengalikan afinitas kategori dengan popularitas dalam kategori menaikkan ndcg@20 dari sekitar 0.05 menjadi 0.13 tanpa pelatihan model, argumen paling jelas untuk personalisasi.
+- Popularitas global memberi setiap pengguna beberapa item yang sama (cakupan 0.0087) dan menyuapi lingkaran yang memperkuat dirinya sendiri; bab-bab berikutnya menambahkan personalisasi, eksplorasi, dan diversitas untuk melawannya.
 
 ## Kuis
 
@@ -360,9 +360,9 @@ B. Popularitas item simulasi stabil, sehingga riwayat yang lebih panjang memberi
 C. `pop_7d` memakai minggu evaluasi yang berbeda.
 D. Peluruhan tidak diterapkan pada `pop_all_time`, dan peluruhan selalu merugikan.
 
-**Q3.2** Sebuah item punya rating katalog 4,4 tetapi `rating_count = 0`. Berapa skor rata-rata Bayesian-nya?
+**Q3.2** Sebuah item punya rating katalog 4.4 tetapi `rating_count = 0`. Berapa skor rata-rata Bayesian-nya?
 
-A. 4,4, karena rating item itu sendiri selalu dipakai.
+A. 4.4, karena rating item itu sendiri selalu dipakai.
 B. 0, karena tidak ada bukti.
 C. Rata-rata rating global $C$, karena dengan $v=0$ seluruh bobot jatuh pada prior.
 D. Rata-rata dari $m$ dan $C$.
@@ -385,9 +385,9 @@ path: recommender/recsys/candidates.py
 symbol: item_popularity
 ```
 
-**Q3.7** Numerik. Dengan half-life 7 hari, hitung skor popularitas terluruh sebuah item yang memiliki event berikut (bobot dari repositori: klik = 1, add-to-cart = 3, pesanan = 5): satu pesanan 7 hari lalu, satu klik 14 hari lalu, dan satu add-to-cart 3 hari lalu. Gunakan $2^{-3/7} \approx 0{,}743$.
+**Q3.7** Numerik. Dengan half-life 7 hari, hitung skor popularitas terluruh sebuah item yang memiliki event berikut (bobot dari repositori: klik = 1, add-to-cart = 3, pesanan = 5): satu pesanan 7 hari lalu, satu klik 14 hari lalu, dan satu add-to-cart 3 hari lalu. Gunakan $2^{-3/7} \approx 0.743$.
 
-**Q3.8** Numerik. Sebuah item punya $v = 20$ rating dengan rata-rata $R = 4{,}8$. Rata-rata rating global adalah $C = 4{,}0$ dan kekuatan prior $m = 100$. Berapa rata-rata Bayesian-nya? Berapa jadinya jika $v = 400$ rating dengan rata-rata yang sama?
+**Q3.8** Numerik. Sebuah item punya $v = 20$ rating dengan rata-rata $R = 4.8$. Rata-rata rating global adalah $C = 4.0$ dan kekuatan prior $m = 100$. Berapa rata-rata Bayesian-nya? Berapa jadinya jika $v = 400$ rating dengan rata-rata yang sama?
 
 **Q3.9** Jawaban singkat. Anda ingin sebuah event bernilai tepat 25% dari event baru setelah 10 hari. Half-life berapa yang Anda butuhkan? Lalu jelaskan dalam satu kalimat mengapa half-life yang *lebih kecil* membuat sistem rekomendasi bereaksi lebih cepat tetapi juga lebih berisik.
 
