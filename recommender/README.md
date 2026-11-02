@@ -15,13 +15,24 @@ flowchart LR
 
 ## Quick start
 
+`simulate`, `train` and `recommend` are the **offline CSV lab**: they work on simulated CSVs in `recommender/data/` and never touch the marketplace database. The live app uses `seed-db`, `serve` and `retrain` (see [../docs/GUIDE.md](../docs/GUIDE.md)).
+
 ```bash
-uv sync
-uv run recsys schema              # print raw tables + every feature with its meaning
-uv run recsys simulate            # 60 days of fake marketplace activity -> data/*.csv
-uv run recsys train --ablation    # train, compare against baselines, measure each feature group
-uv run recsys recommend 42        # a user's history + their top 10 recommendations, with reasons
-uv run pytest                     # leakage guard
+cd recommender && uv sync
+cd recommender && uv run recsys schema              # print raw tables + every feature with its meaning
+cd recommender && uv run recsys simulate            # 60 days of fake marketplace activity -> data/*.csv
+cd recommender && uv run recsys train --ablation    # train, compare against baselines, measure each feature group
+cd recommender && uv run recsys recommend 42        # a user's history + their top 10 recommendations, with reasons
+cd recommender && uv run pytest                     # leakage guard
+```
+
+Live marketplace commands (need PostgreSQL, see the guide):
+
+```bash
+cd recommender && uv run recsys seed-db --yes       # replace the marketplace DB with a simulated history ending now
+cd recommender && uv run recsys serve               # gRPC recommender on 127.0.0.1:50051
+cd recommender && uv run recsys retrain             # train on the DB, save artifacts/ranker.txt + model_meta.json
+cd recommender && uv run recsys gen-proto           # regenerate recsys/pb from ../proto/recommender.proto
 ```
 
 The CSVs in `data/` are ordinary tables. Open `events.csv` to see exactly what the model learns from.
