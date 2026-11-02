@@ -2,9 +2,11 @@
 
 ## The shopper nobody resembles
 
-Rina has clicked a ceramic pour-over set, a hand grinder and paper filters, plus, on a slow Tuesday, wired earphones. The user-based recommender from the previous chapter looks for neighbours who clicked the *same* items, and in a catalogue of two thousand products almost nobody did. This is the sparsity problem of Chapter 1: neighbourhood methods compare raw rows of an almost empty matrix, so two shoppers with the same taste but no shared SKU have cosine zero.
+Rina has clicked a ceramic pour-over set, a hand grinder and paper filters, plus, on a slow Tuesday, wired earphones. The user-based recommender from the previous chapter looks for neighbours (shoppers with similar click histories) who clicked the *same* items, and in a catalogue of two thousand products almost nobody did. This is the sparsity problem of Chapter 1 (the click table is almost entirely empty): neighbourhood methods compare raw rows of that nearly empty table, so two shoppers with the same taste but no shared SKU (stock-keeping unit, a product's unique code) have cosine zero (cosine similarity, a 0-to-1 score of how much two rows overlap, is zero when they share nothing).
 
 Matrix factorisation asks instead: *what small set of hidden tastes could explain all these clicks at once?* Each shopper becomes a short vector of taste strengths, each product a short vector of "how much of each taste I contain", and a pair's score is their dot product. We build it in plain numpy so nothing hides behind a library call.
+
+Think of it this way. Instead of recording every one of Rina's clicks, we write a short "taste card" for Rina, such as "mostly coffee gear, a little gadgets", and a taste card for every product. If Rina's card and a product's card point the same way, we recommend it. Finding those cards automatically is the whole technique.
 
 **What you'll learn**
 
@@ -14,11 +16,24 @@ Matrix factorisation asks instead: *what small set of hidden tastes could explai
 - How BPR optimises ranking directly with a pairwise loss, with its gradient worked out by hand.
 - How to read the loss curves, tune `factors`, `reg`, `alpha`, `lr`, and compare both models against the baselines from Chapters 3 and 5 on exactly the same labels.
 
+**Words you will meet.** Each is explained again where it first matters; this table is only a first map.
+
+| Word | Plain meaning | Tiny example |
+|---|---|---|
+| **Vector** | A short list of numbers | Sari's taste card $(0.9, 0.1)$ |
+| **Dot product** | Multiply two vectors position by position, then add | $(0.9, 0.1)\cdot(1.0, 0.0) = 0.9 \times 1.0 + 0.1 \times 0.0 = 0.9$ |
+| **Parameter** | A number the model learns by itself | Every number on every taste card |
+| **Loss** | A single score for "how wrong is the model right now"; training tries to make it small | Predicted 3.5 when the truth is 5 |
+| **Hyperparameter** | A dial *you* set before training starts; the model does not learn it | How many numbers each card has |
+| **Epoch / iteration** | One full pass over the training data | Reading every shopper's clicks once |
+
 ## Intuition: the taste dimensions nobody wrote down
 
 Imagine describing your regulars to a new barista. You would not hand over a spreadsheet with a tick per menu item; you would say "Dewi likes strong and black, Bayu likes sweet and milky". A few phrases summarise hundreds of purchases and *predict* behaviour.
 
 Matrix factorisation automates exactly that summarising step. Those phrases ("strong-and-black", "sweet and milky") are the **latent factors**: dimensions of taste that nobody labelled in advance, discovered because they make the purchase data easier to explain. The word *latent* just means hidden. The algorithm does not know what a factor means; it only knows that giving every user a value on factor 1 and every item a value on factor 1 lets it reconstruct the click matrix better.
+
+Why does this matter? Without hidden factors, the only way to say two shoppers are alike is to find a product both clicked. Factors let two shoppers be alike because they share a *taste*, even when they share no product.
 
 A toy example makes the mechanics concrete. Suppose there are only two factors, and by luck we can name them: factor A is "gadget-ness" and factor B is "kitchen-and-food-ness". Every product has a value on each factor, and so does every shopper:
 
@@ -35,7 +50,11 @@ A toy example makes the mechanics concrete. Suppose there are only two factors, 
 
 The score is the dot product: for the gadget lover and the earphones, $1.2 \times 1.0 + 0.2 \times 0.0 = 1.20$; for the foodie and the noodles, $0.1 \times 0.0 + 1.1 \times 1.0 = 1.10$. Ranked, the gadget lover gets earphones (1.20), power bank (1.10), coffee grinder (0.64), noodles (0.20); the foodie gets noodles, grinder, power bank. The grinder is a *bridge* with a bit of both tastes, which a neighbourhood method cannot express. The foodie also never needs to click the *same* noodles as anyone else: clicks on peanuts, cooking oil and a rice cooker land the vector near $(0.1, 1.1)$, so every item with a large factor B scores high. The unit of transfer is the factor, not the product.
 
+These short lists of numbers also have another name: **embeddings**. An embedding is a short vector of numbers that stands in for a user or an item, placed so that similar things get similar numbers. Here the "gadget lover" row and the "foodie" row are user embeddings, and each item row is an item embedding. Chapter 7 uses the word a lot, so it is worth recognising it now.
+
 The second idea is **low rank**. A click matrix with $m$ users and $n$ items has $m \times n$ cells. A factorisation with $f$ factors replaces it with two matrices that hold only $(m + n) \times f$ numbers. In this chapter's data that is the difference between roughly three million cells ($1408 \times 2120 = 2{,}984{,}960$) and $(1408 + 2120) \times 32 = 112{,}896$ parameters. Squeezing that much information through a narrow bottleneck *forces* the model to find the regularities in the data, which is why compression and generalisation are, here, the same thing.
+
+In plain words: **low rank means few factors.** Instead of remembering every shopper's reaction to every product, we keep one short taste card per shopper and one per product (32 numbers each), and any reaction can be rebuilt from two cards. The word *parameter* here means one of the numbers on those cards, the things training must find.
 
 ## The algorithm
 
@@ -51,11 +70,19 @@ $$\hat{r}_{ui} = x_u \cdot y_i = \sum_{k=1}^{f} x_{uk}\, y_{ik}.$$
 
 Training means choosing $X$ and $Y$. The three methods differ only in *what loss they minimise*.
 
+**What is a loss function?** A loss function is a score for how wrong the model's guesses are; training means changing the numbers until the score is as small as possible. Imagine a dart game where you lose points for the distance from the bullseye: a perfect throw costs 0, a wild throw costs a lot. The most common recipe is to take the gap between guess and truth and **square** it. If the model guesses 3.5 and the truth is 5, the gap is 1.5 and the loss is $1.5^2 = 2.25$. Squaring does two useful things: over-guessing and under-guessing both cost points (no cancelling), and big misses cost far more than small ones (a miss of 0.5 costs only 0.25). Without a loss there is nothing to improve against: the model would have no way to tell a good set of taste cards from a bad one.
+
 ### Explicit factorisation and Funk's SGD
 
 Suppose, for a moment, that we had star ratings, the setting of the Netflix Prize. Only the cells in the observed set $\mathcal{K}$ carry information, and we want predictions that match them while keeping the vectors small, to avoid memorising noise:
 
 $$\mathcal{L} = \sum_{(u,i) \in \mathcal{K}} \left( r_{ui} - x_u \cdot y_i \right)^2 + \lambda \left( \lVert x_u \rVert^2 + \lVert y_i \rVert^2 \right).$$
+
+Read this formula piece by piece. $\mathcal{K}$ is the set of cells where we really saw a rating. $r_{ui}$ is the true rating, $x_u \cdot y_i$ is the model's guess, and their gap squared is the loss from the previous paragraph, added up over all observed cells. The second part, with $\lambda$ (lambda, a dial you choose), is **regularisation**: a small penalty on the *size* of the numbers on the cards, since $\lVert x_u \rVert^2$ is just "how big is this vector", squared.
+
+Why penalise size? Because of **overfitting**. A student who memorises last year's exam answers scores perfectly on last year's paper and badly on this year's; the model can do the same, using huge, oddly specific numbers to remember each click exactly, noise included, and then predicting new clicks poorly. The penalty makes big numbers expensive, so the model prefers simple cards that capture real patterns and not one-off accidents. A larger $\lambda$ means a stronger penalty.
+
+**What are a gradient and gradient descent?** We still need a way to change the cards so the loss shrinks. The **gradient** says, for each number, "if you nudge this number up a little, does the loss rise or fall, and how fast?" Think of walking down a foggy hill: you cannot see the valley, but you can feel which way the ground tilts under your feet, so you take a step downhill, feel again, and repeat. That is **gradient descent**. The size of each step is the **learning rate**, written $\gamma$ here. **Stochastic** gradient descent (**SGD**) feels the slope using just one rating at a time rather than all of them, which is cheap and works well in practice. A step too large overshoots the valley; too small takes forever.
 
 Write the prediction error $e_{ui} = r_{ui} - x_u \cdot y_i$. Differentiating one term with respect to $x_u$ gives $-2\, e_{ui}\, y_i + 2\lambda x_u$, and similarly for $y_i$. Folding the constant 2 into the learning rate $\gamma$, one step of stochastic gradient descent on one observed rating is:
 
@@ -73,12 +100,25 @@ Source: Funk, "Netflix Update: Try This at Home" (sifter.org blog), 2006
 
 ### Why explicit factorisation is a poor fit for clicks
 
+**Explicit and implicit feedback.** *Explicit* feedback is when users tell you directly how much they like something, such as a 1-to-5 star rating. *Implicit* feedback is what you infer from behaviour: clicks, add-to-carts, orders. Shopping data is almost entirely implicit, because shoppers rarely rate what they click.
+
 Implicit feedback has **no observed negatives**: if Rina did not click the gaming mouse, she may dislike it or may never have seen it. Fitting only nonzero cells lets predictions drift upward; treating zeros as ratings of 0 claims most of the catalogue is hated. And the numbers mean something else: a weight of 6 (click plus order) expresses *confidence*, not the size of a preference.
 
 Hu, Koren and Volinsky resolved both problems with one reframing. Split every cell into two quantities:
 
 - A binary **preference** $p_{ui} = 1$ if $R_{ui} > 0$, and $0$ otherwise.
 - A **confidence** $c_{ui} = 1 + \alpha R_{ui}$.
+
+Here is what that means with this chapter's `alpha = 20` (a dial you set; see the hyperparameter list below) for shopper Sari:
+
+| What Sari did to an item | $R_{ui}$ | Preference $p_{ui}$ | Confidence $c_{ui} = 1 + 20 R_{ui}$ |
+|---|---|---|---|
+| Never touched it | 0 | 0 | 1 |
+| Clicked it once | 1 | 1 | 21 |
+| Put it in the cart (weight 3) | 3 | 1 | 61 |
+| Ordered it (weight 5) | 5 | 1 | 101 |
+
+The preference is the same (1) for all three touched rows; only the confidence grows. A shop assistant analogy fits: a customer who buys a product tells you far more than one who glanced at it, so you trust the purchase more.
 
 The preference answers "did this user show any interest?". The confidence answers "how much should the loss care about getting this cell right?". Observed cells with a lot of evidence get large confidence; unobserved cells keep the floor value $c = 1$: we still *weakly* believe they are zeros, because on a huge catalogue most unseen things really are uninteresting, but we believe it far less than we believe a purchase.
 
@@ -98,6 +138,8 @@ Source: Hu et al., ICDM, 2008
 
 The loss $\mathcal{L}_{\text{ALS}}$ is not convex in $(X, Y)$ jointly, because it contains the product $x_u \cdot y_i$. But fix one side and it becomes a perfectly ordinary weighted least-squares problem in the other. That observation gives the algorithm its name: **alternating least squares**. Hold $Y$ fixed and solve for every user vector exactly; then hold $X$ fixed and solve for every item vector exactly; repeat.
 
+Two terms in that paragraph need a plain reading. **Least squares** means "find the numbers that make the sum of squared gaps as small as possible"; with a single unknown number you can often write down the best answer directly. **Alternating** is like tuning two knobs on a radio: hold one still, set the other to its best position, then swap roles, and repeat until neither wants to move. We hold $Y$ still so only the user cards are unknown, which turns a hard problem into many easy ones.
+
 Take a single user $u$ with $Y$ fixed. The only terms that involve $x_u$ are
 
 $$J(x_u) = \sum_{i} c_{ui} \left( p_{ui} - x_u \cdot y_i \right)^2 + \lambda \lVert x_u \rVert^2 .$$
@@ -116,6 +158,8 @@ $$\boxed{\; x_u = \left( Y^{\top} C^u Y + \lambda I \right)^{-1} Y^{\top} C^u\, 
 
 This is the closed-form solve. The matrix in brackets is $f \times f$, symmetric and, thanks to $\lambda I$, positive definite, so the solution is unique and each such solve can only *decrease* the loss, never increase it. That is why the training curve we will see later falls monotonically with no learning-rate tuning at all. Item vectors follow by symmetry: swap the roles of users and items and use the columns of $C$ and $P$.
 
+In plain words: this is a **closed-form** answer, a formula that gives the best $x_u$ in one calculation, with no stepping downhill and therefore no learning rate. "Positive definite" and "monotonic" mean the formula always has exactly one answer and that each solve can only keep the loss the same or lower it. The curve in the Results section will show this.
+
 #### The Gram-matrix trick
 
 Computing $Y^{\top} C^u Y$ naively costs $O(f^2 n)$ per user, since $C^u$ has $n$ diagonal entries. With $n = 2120$ items and 1408 users that is a lot of wasted work, because almost all of those entries equal 1. Hu et al. split the matrix:
@@ -123,6 +167,8 @@ Computing $Y^{\top} C^u Y$ naively costs $O(f^2 n)$ per user, since $C^u$ has $n
 $$Y^{\top} C^u Y = Y^{\top} Y + Y^{\top} \left( C^u - I \right) Y .$$
 
 The first term, the **Gram matrix** $Y^{\top}Y$, does not depend on the user, so it is computed once per sweep. The second term has non-zero entries only for the $n_u$ items the user actually touched (where $c_{ui} - 1 = \alpha R_{ui} > 0$), so it costs $O(f^2 n_u)$. Likewise the right-hand side collapses to a sum over the user's touched items because $p_{ui} = 0$ elsewhere. The total cost of a sweep is therefore proportional to the number of *observed* cells, not to $m \times n$, which is what makes ALS practical on real data.
+
+A note on the notation $O(f^2 n_u)$: it is a rough count of how many arithmetic steps the work takes, so it tells you how cost grows. $O(f^2 n)$ with $n = 2120$ items per user is a lot more work than $O(f^2 n_u)$ with only the handful of items $n_u$ that one user touched.
 
 **Worked example 2: one ALS solve by hand.** Take $f = 1$ factor, item factors $y = (1, 2, 3)$, a user who touched items 1 and 2 with $R = (1, 2)$ (item 3 untouched), $\alpha = 2$, $\lambda = 0.5$. Then $p = (1,1,0)$ and $c = (3,5,1)$. The Gram term is $Y^{\top}Y = 14$, the correction is $Y^{\top}(C-I)Y = 2\cdot1 + 4\cdot4 = 18$, so the left side is $14 + 18 + 0.5 = 32.5$ (summing $c\,y^2 + \lambda$ directly gives the same). The right side is $\sum c\,p\,y = 3 + 10 = 13$, so $x_u = 13/32.5 = 0.4$ and the predictions are $(0.4, 0.8, 1.2)$. With one factor the model cannot satisfy everyone, which is why real models use 32; the structure to remember is that one user is a small weighted ridge regression over the items they touched.
 
@@ -141,7 +187,13 @@ flowchart TD
 
 ALS minimises squared error on 0/1 targets. But we never show a user a 0/1 prediction; we show a *ranked list*. Rendle and colleagues asked: why not optimise the ranking directly? The training data becomes **triples** $(u, i, j)$ where $i$ is an item user $u$ interacted with and $j$ is one they did not. The model should score $i$ above $j$.
 
-Let the gap be $\hat{x}_{uij} = x_u \cdot y_i - x_u \cdot y_j = x_u \cdot (y_i - y_j)$. Squash it with the logistic function $\sigma(z) = 1/(1 + e^{-z})$ to get the model's probability of ordering the pair correctly. The BPR objective maximises the log of that probability over sampled triples, with L2 regularisation coming from a Gaussian prior on the parameters, which is the "Bayesian" in the name:
+A tiny example: Sari clicked cat food ($i$) and never clicked a phone case ($j$). BPR does not ask "what is Sari's exact score for cat food?"; it asks only "is cat food scored *above* the phone case?" and nudges the numbers until the answer is yes. (*BPR* stands for Bayesian Personalised Ranking: learning an order for each person.)
+
+Let the gap be $\hat{x}_{uij} = x_u \cdot y_i - x_u \cdot y_j = x_u \cdot (y_i - y_j)$: how far the clicked item's score is above the random item's. We squash it with the logistic function $\sigma(z) = 1/(1 + e^{-z})$ to get the model's probability of ordering the pair correctly.
+
+The *logistic function* $\sigma$ (also called the sigmoid) squashes any number into the range 0 to 1, so it can be read as a probability. For example $\sigma(0) = 0.5$ (a coin flip), $\sigma(0.5) \approx 0.6225$ (a mild lead), $\sigma(4) \approx 0.982$ (a big lead, almost certainly right) and $\sigma(-4) \approx 0.018$ (almost certainly wrong).
+
+The BPR objective maximises the log of that probability over sampled triples. A *prior* is a starting belief, here that parameters should be small; BPR's "Gaussian prior" on the parameters simply turns into the same size penalty (L2 regularisation) as before, and it is the "Bayesian" in the name. So read the next formula as: *push the probability that every clicked item beats its random item as high as possible, while keeping the numbers small*. The minus sign turns "maximise" into "minimise a loss":
 
 $$\mathcal{L}_{\text{BPR}} = - \sum_{(u,i,j)} \ln \sigma\bigl( \hat{x}_{uij} \bigr) + \lambda \lVert \Theta \rVert^2 .$$
 
@@ -162,6 +214,8 @@ The scalar $s$ is the key. When the pair is already ordered correctly by a wide 
 One practical detail. At initialisation all vectors are close to zero, so every gap is close to 0 and $\sigma(0) = 0.5$, meaning every triple has loss $-\ln 0.5 = \ln 2 \approx 0.693$. When you train BPR, a loss that *starts* near 0.693 is a good sign that the code is wired correctly.
 
 ### Hyperparameters in one place
+
+A **hyperparameter** is a dial you set *before* training; **parameters** (the numbers on the taste cards) are what training learns. **Underfitting** is the opposite of overfitting: the model is too simple to capture real patterns (a taste card with too few numbers to tell coffee from gadgets). One **epoch** is one full pass over the training data.
 
 - `factors` $f$: too low underfits (tastes cannot be separated), too high overfits and slows training.
 - `reg` $\lambda$: too low memorises sparse users, too high shrinks every score toward 0.
@@ -262,6 +316,8 @@ lines: 57-65
 
 ### Reading the loss curves
 
+A **loss curve** plots the loss after each iteration or epoch. If it goes down, the model is learning; when it stops going down and flattens, we say it has **converged** (settled) and more training adds little. The "knee" is the point where a steep drop turns into a flat line.
+
 ![Implicit ALS: weighted squared loss plus regularisation per iteration. The first alternating sweep removes most of the loss, then the curve flattens.](../assets/charts/ch06-als-loss.png)
 
 The ALS loss falls on **every** iteration, as the derivation promised: from 225190.5 at iteration 1 to 147262.9 at iteration 2, 120478.2 at iteration 5, and 111911.5 then 111705.9 at iterations 14 and 15 (about 0.2% apart). The curve has flattened, so 15 iterations is past the knee.
@@ -272,7 +328,9 @@ The BPR curve starts at 0.6937, essentially $\ln 2 \approx 0.693$: at initialisa
 
 ### Ranking quality against everything so far
 
-Training loss is not ranking quality, so we evaluate both models on the same held-out week and metrics as earlier chapters (the ch06 rows are in the table above). For comparison, the Chapter 5 methods and the best Chapter 3 baseline on identical labels:
+Training loss is not ranking quality, so we evaluate both models on the same held-out week and metrics as earlier chapters (the ch06 rows are in the table above). First, quick reminders of the metrics. **recall@20**: of the items the shopper really interacted with in the held-out week, what share appear in our top 20. **ndcg@20**: a score that also rewards putting those items near the top of the list rather than at position 20. **coverage@20**: what share of the catalogue appears in at least one user's top 20; low coverage means everyone gets the same items. A **candidate generator** is a model that cheaply finds a few hundred plausible items; a **ranker** then orders them carefully.
+
+For comparison, the Chapter 5 methods and the best Chapter 3 baseline on identical labels:
 
 ```output
 file: results/ch05_cf.txt
@@ -314,11 +372,11 @@ Source: Rendle et al., UAI, 2009
 
 **Unobserved is not negative.** ALS gives blanks weight 1 and BPR samples blanks uniformly, but a great item the user never saw is still penalised. Production systems use *exposure-aware* negatives (items shown but ignored, i.e. `impression` events, which this repo logs) and popularity-weighted sampling, since uniform sampling picks rare items as negatives far more often than popular ones.
 
-**Dense matrices do not scale.** Our code builds dense $C$, $P$ and error matrices. At Shopee scale production keeps $R$ sparse, processes users in GPU-sized blocks and shards $X$ and $Y$; the open-source `implicit` library and Spark MLlib implement the sparse form.
+**Dense matrices do not scale.** Our code builds *dense* $C$, $P$ and error matrices (every cell stored, even the zeros). At Shopee scale production keeps $R$ *sparse* (only non-zero cells stored), processes users in GPU-sized blocks and *shards* $X$ and $Y$ (splits them across many machines); the open-source `implicit` library and Spark MLlib implement the sparse form.
 
-**Fold-in.** With $Y$ frozen, a user's vector is a closed-form solve, recomputable in well under a millisecond from their latest clicks, so a nightly-trained model can still react to fresh behaviour (compare this repo's on-request design).
+**Fold-in.** Fold-in means computing a vector for a user *without retraining*. With $Y$ frozen, a user's vector is a closed-form solve, recomputable in well under a millisecond from their latest clicks, so a nightly-trained model can still react to fresh behaviour (compare this repo's on-request design).
 
-**Dot product, not distance.** Vector length matters for $x_u \cdot y_i$; ANN libraries need a maximum-inner-product variant (Chapter 7).
+**Dot product, not distance.** Vector length matters for $x_u \cdot y_i$; ANN libraries (approximate nearest-neighbour search: fast, slightly inexact lookup of the closest vectors) need a maximum-inner-product variant (Chapter 7).
 
 **Where it sits in this repository.** The recommender service does not use ALS or BPR today: its sources are the four retrievers of Chapter 8 and its ranker is LightGBM (Chapter 10). A natural extension is to train ALS during retrain and use the dot product as an extra candidate source and as a ranker feature (see the checklist in Chapter 14).
 
