@@ -13,19 +13,40 @@ Keduanya benar untuk khawatir. Sebuah sistem rekomendasi tidak punya satu keluar
 - Apa yang diukur oleh **coverage** dan **candidate recall**, dan mengapa sistem rekomendasi bisa tampak "akurat" padahal tidak berguna.
 - Bagaimana `recommender/recsys/evaluate.py` mengimplementasikan semua ini dalam sekitar empat puluh baris pandas, baris demi baris.
 
-## Intuisi: menilai ujian yang jawabannya tidak Anda tulis
+## Intuisi: menguji peramal cuaca dengan cuaca bulan lalu
 
-Bayangkan Anda guru yang ingin tahu apakah seorang murid sudah menguasai aljabar. Anda tidak akan membagikan ujian, membiarkan murid melihat kunci jawaban, lalu menilai ujian yang sama. Anda akan menyisihkan soal yang belum pernah dilihat murid. Dan Anda juga tidak akan memakai ujian *peramal* yang soalnya diambil dari silabus tahun depan; ujian harus sesuai dengan pengetahuan yang memang bisa Anda miliki pada saat itu.
+Untuk menguji sistem rekomendasi, kita **berpura-pura sekarang adalah masa lalu, memintanya memprediksi, lalu memeriksa hasilnya dengan apa yang benar-benar terjadi setelahnya.**
 
-Mengevaluasi sistem rekomendasi mengikuti aturan yang sama, dengan satu keunikan: "kunci jawabannya" adalah masa depan. Kita membekukan dunia pada satu titik waktu (**cutoff**), membuat rekomendasi hanya dari apa yang diketahui sebelum titik itu, lalu melihat apa yang benar-benar dilakukan pengguna *setelahnya*. Jika daftar top-20 kita memuat sekantong makanan kucing yang kemudian dipesan pengguna, kita mendapat poin; jika isinya empat puluh casing ponsel yang tak pernah ia sentuh, kita tidak mendapat apa-apa.
+Bayangkan seorang peramal cuaca. Anda memberinya catatan cuaca **hingga 1 Maret** dan bertanya, "Bagaimana cuaca 2–8 Maret?" Anda sudah tahu jawabannya, karena ada di catatan Anda, tetapi Anda menyembunyikannya darinya. Anda membandingkan ramalannya dengan kenyataan; perbandingan itulah skornya. *Curang* berarti membiarkannya membaca koran 5 Maret lebih dulu.
 
-Dua hal mengikuti dari sini. Pertama, **murid tidak boleh melihat kunci jawaban**: apa pun yang dihitung dari data setelah cutoff terlarang saat kita menghasilkan rekomendasi. Inilah *kebocoran data* (*leakage*), penyebab nomor satu hasil yang tampak indah secara offline lalu ambruk di produksi. Kedua, **satu ujian tidak pernah cukup**: sistem rekomendasi bisa mendapat skor akurasi bagus sambil tetap menampilkan dua puluh barang terlaris yang sama kepada semua pengguna, sehingga kita memerlukan metrik untuk akurasi, kualitas pemeringkatan, keluasan, dan batas atas yang ditetapkan oleh tahap-tahap pipeline sebelumnya. Jawaban yang berbeda juga layak diberi bobot berbeda: pesanan lebih bernilai daripada klik, dan slot 1 lebih bernilai daripada slot 18.
+Sekarang pengujian yang sama untuk sistem rekomendasi toko. Catatan kita mencakup 60 hari, dan pembeli bernama Sari melakukan hal berikut:
+
+| Hari | Yang dilakukan pembeli Sari |
+|---|---|
+| 1–52 | Melihat-lihat mainan kucing, mengklik beberapa merek makanan kucing, memasukkan satu ke keranjang, tidak membeli |
+| *53 = cutoff* | *kita membekukan waktu di sini* |
+| 55 | **Memesan sekantong makanan kucing 2 kg** |
+
+Sistem rekomendasi hanya melihat hari 1–52 dan menghasilkan 20 item teratas untuk Sari. Lalu kita membuka kunci jawaban (apa yang terjadi setelah hari 53): apakah kantong makanan kucing muncul di daftarnya, dan di posisi seberapa tinggi? Jika ada di daftar, kita mendapat poin, lebih banyak bila posisinya dekat puncak. Jika daftarnya berisi dua puluh casing ponsel yang tak pernah ia sentuh, kita tidak mendapat apa-apa.
+
+**Cutoff** (hari 53 di sini) adalah momen ketika kita membekukan dunia. Ia punya dua tugas:
+
+1. **Mencegah kecurangan.** Semua yang boleh dipakai sistem rekomendasi (klik, keranjang, pesanan, popularitas item, fitur apa pun yang dihitung dari semuanya) harus berasal dari *sebelum* cutoff.
+2. **Menentukan kunci jawaban.** **Label** adalah apa yang dilakukan pengguna dalam 7 hari *setelah* cutoff, dari hari 53 hingga akhir data di hari 60. Inilah "jawaban benar" yang kita pakai untuk menilai.
+
+**Kebocoran data** (*leakage*) adalah curang tanpa sengaja: informasi dari setelah cutoff menyelinap ke dalam apa yang dilihat sistem rekomendasi. Ini contoh konkretnya. Misalkan kita membuat fitur "berapa kali pengguna ini memesan item ini", dan menghitungnya atas seluruh 60 hari, bukan hari 1–52. Untuk Sari dan kantong makanan kucing, fitur itu akan memuat pesanan di hari 55 yang justru ingin kita prediksi. Sistem rekomendasi lalu tampak hebat, karena ia tinggal membaca jawabannya. Namun di produksi, pada hari 53, pesanan hari 55 belum terjadi, sehingga fitur itu kosong dan model ambruk. Kebocoran adalah penyebab nomor satu hasil yang tampak indah secara offline lalu gagal di produksi. Di bab 9 kita sengaja membuat kolom bocor seperti itu: ia menaikkan skor pemeringkatan NDCG@20 (dijelaskan di bawah) dari 0.2116 yang jujur menjadi 0.5035, kenaikan yang sepenuhnya palsu.
+
+Pelajaran kedua: **satu metrik tidak pernah cukup.** Sistem rekomendasi bisa mendapat skor akurasi bagus sambil tetap menampilkan dua puluh barang terlaris yang sama kepada semua pengguna. Karena itu kita memerlukan metrik untuk akurasi, kualitas pemeringkatan, keluasan, dan batas atas yang ditetapkan oleh tahap-tahap pipeline sebelumnya. Jawaban yang berbeda juga layak diberi bobot berbeda: pesanan lebih bernilai daripada klik, dan slot 1 lebih bernilai daripada slot 18.
 
 ## Evaluasi offline versus online
 
 Ada dua tempat untuk mengukur sistem rekomendasi, dan keduanya menjawab pertanyaan yang berbeda.
 
+Dalam istilah cuaca: evaluasi **offline** adalah pengujian di atas, dijalankan pada sejarah yang tercatat. Evaluasi **online** adalah membiarkan peramal menerbitkan ramalan sungguhan hari ini dan melihat bagaimana publik bereaksi.
+
 **Evaluasi online** berarti menempatkan model di hadapan pengguna sungguhan dan mengamati apa yang terjadi. Alat standarnya adalah **A/B test**: membagi pengguna secara acak menjadi kelompok kontrol (model lama) dan kelompok perlakuan (model baru), lalu membandingkan metrik bisnis, seperti *click-through rate* $\text{CTR} = \frac{\text{clicks}}{\text{impressions}}$, tingkat konversi, jumlah pesanan per sesi, atau *gross merchandise value* (GMV) per pengguna. Hasil online adalah kebenaran dasar (*ground truth*). Ia menangkap segalanya: efek kebaruan, tata letak halaman, latensi, dan fakta bahwa pengguna bereaksi terhadap apa yang ditampilkan kepada mereka. Namun ia lambat (berhari-hari atau berminggu-minggu untuk mencapai signifikansi statistik), mahal (model yang buruk merugikan pendapatan sungguhan selama Anda mencari tahu bahwa ia buruk), dan Anda hanya bisa menjalankan beberapa eksperimen sekaligus.
+
+Tiga istilah dalam paragraf itu, dengan bahasa sederhana. **A/B test** adalah balapan yang adil antara dua versi: lemparan koin menentukan, untuk setiap pengguna, apakah ia melihat versi A (model saat ini) atau versi B (model baru), pada waktu yang sama. Karena kedua kelompok menjalani minggu yang sama, promo akhir pekan atau hari libur memengaruhi keduanya sama rata, sehingga selisih di antara mereka disebabkan oleh model. **CTR** (*click-through rate*) adalah bagian item yang ditampilkan lalu diklik: 3 klik dari 100 impresi (berapa kali item ditampilkan) berarti CTR 3%. **GMV** (*gross merchandise value*) adalah total nilai uang dari semua yang terjual.
 
 **Evaluasi offline** memutar ulang sejarah. Anda mengambil perilaku yang tercatat, berpura-pura sekarang adalah hari sebelum sesuatu terjadi, menghasilkan rekomendasi, lalu menilainya terhadap apa yang terjadi berikutnya. Ia cepat (hitungan menit), gratis, dapat diulang, dan Anda bisa menguji seratus varian dalam satu sore. Kelemahannya, sejarah hanya berisi apa yang dilakukan pengguna sebagai respons terhadap pilihan sistem *lama*. Item yang tak pernah ditampilkan sistem lama tidak punya klik; model yang akan memunculkannya tidak mendapat kredit. Angka offline hanyalah **proksi**.
 
@@ -38,6 +59,8 @@ Sumber: Amatriain & Basilico, Netflix Technology Blog, 2012
 :::
 
 ## Pembagian berbasis waktu, dan mengapa pembagian acak membocorkan data
+
+Sebuah **pembagian berbasis waktu** (*time-based split*) berarti kita memilih satu tanggal, memakai semua yang terjadi sebelumnya untuk membangun sistem rekomendasi, dan menilainya hanya dari apa yang terjadi sesudahnya, seperti pada tabel Sari di atas. Alternatif yang lazim, **pembagian acak** (*random split*), mengocok semua event lalu menyisihkan sebagian untuk pengujian. Itu tidak masalah untuk foto kucing dan anjing, tetapi tidak di sini, seperti ditunjukkan paragraf berikutnya.
 
 Tutorial machine learning biasanya berkata "acak datanya dan sisihkan 20% untuk pengujian". Untuk sistem rekomendasi, saran ini berbahaya. Misalkan kita punya 60 hari event lalu mengacaknya menjadi 80% train dan 20% test. Sebuah klik pada hari ke-52 bisa masuk ke set training sementara klik pengguna yang sama pada hari ke-14 masuk ke set test. Model lalu "memprediksi" hari ke-14 dengan memanfaatkan pengetahuan tentang hari ke-52. Secara konkret ia bisa mempelajari:
 
@@ -88,6 +111,8 @@ Membagi event dengan benar baru separuh pekerjaan: fitur seperti "jumlah pesanan
 
 ## Apa yang kita ukur: label dan daftar berperingkat
 
+Dua definisi sederhana dulu. **Daftar berperingkat** (*ranked list*) hanyalah item yang kita tampilkan kepada pengguna, terbaik lebih dulu (bagian atas feed produk). **Relevansi bergradasi** (*graded relevance*) berarti tidak semua keberhasilan bernilai sama: pengguna yang *memesan* sebuah item memberi tahu kita lebih banyak daripada yang sekadar *mengklik*-nya, jadi setiap hasil kita beri angka (sebuah *grade*), bukan sekadar ya atau tidak. Tabel di bawah adalah penilaian itu.
+
 Sebelum masuk ke rumus, mari tetapkan kosakata. Untuk pengguna $u$ dan cutoff $t_c$ tertentu, sistem rekomendasi menghasilkan **daftar berperingkat** item $r_1, r_2, \dots, r_K$, terbaik lebih dulu. Kita membandingkannya dengan apa yang benar-benar dilakukan pengguna selama jendela label. Repo ini menurunkan **label** bergradasi untuk setiap pasangan (pengguna, item) yang disentuh pengguna:
 
 | Perilaku dalam jendela label | Label |
@@ -105,6 +130,8 @@ Sebut item dengan label positif sebagai **positif masa depan** (*future positive
 
 ### Precision@K dan recall@K
 
+Akhiran **@K** (dibaca "at K") hanya berarti "lihat hanya $K$ item pertama dari daftar", misalnya 20 teratas di halaman. **Hit** adalah item dalam daftar itu yang kemudian memang direspons pengguna.
+
 Dua pertanyaan paling dasar tentang daftar top-$K$ adalah:
 
 - **Precision@K**: dari $K$ item yang kita tampilkan, berapa bagian yang direspons pengguna?
@@ -117,7 +144,17 @@ $$
 
 "Hit" adalah item dalam daftar yang merupakan positif masa depan. Untuk satu pengguna, keduanya hanyalah sebuah hitungan yang dibagi dengan bilangan berbeda. Precision peduli pada *pemborosan* (setiap slot adalah ruang layar yang mahal), recall peduli pada *cakupan terhadap apa yang diinginkan pengguna*. Di marketplace dengan ribuan item per kategori, dan pengguna yang hanya merespons segelintir dalam seminggu, nilai precision wajar saja sangat kecil; recall lebih mudah dibaca dan paling sering dilaporkan buku ini. Ketika $K$ tetap dan besar dibandingkan $R$, precision dan recall membawa informasi yang sama hingga faktor skala, itulah sebabnya kita lebih sering menampilkan recall.
 
+Contoh kecil dengan Sari. Misalkan kita menampilkan 5 item. Kemudian Sari merespons 4 item (kantong makanan kucing, sebuah mainan, bak pasir, sebuah sikat), dan 2 di antaranya ada dalam 5 item kita. Maka precision@5 adalah $2/5 = 0.4$ ("dua dari lima slot berguna") dan recall@5 adalah $2/4 = 0.5$ ("kita menampilkan separuh dari yang ia inginkan"). Jika kita menampilkan 50 item dan menangkap keempatnya, recall akan 1 tetapi precision hanya $4/50 = 0.08$: itulah sebabnya kita melihat keduanya.
+
 Keduanya mengabaikan **urutan** di dalam top $K$: menemukan hit di slot 1 atau slot 20 memberi skor sama. Di halaman sungguhan itu keliru, karena slot 1 dilihat hampir semua orang sedangkan slot 20 menuntut scroll. Kita butuh metrik yang peka terhadap posisi.
+
+### Hit rate dan MRR: dua pemeriksaan posisi yang cepat
+
+Makalah dan dasbor sering memakai dua metrik yang lebih sederhana dari yang di atas. Buku ini tidak melaporkannya, tetapi Anda akan menjumpainya, jadi inilah penjelasannya.
+
+**Hit rate@K** mengajukan pertanyaan ya/tidak per pengguna: apakah *setidaknya satu* dari $K$ item teratas adalah hit? Hit rate adalah bagian pengguna yang jawabannya ya. Jika 4 dari 10 pengguna menemukan sesuatu yang relevan di 20 teratas mereka, hit rate@20 adalah 0.4. Mudah dibaca, tetapi memberi kredit sama untuk satu hit maupun sepuluh.
+
+**MRR** (*mean reciprocal rank*, rata-rata peringkat resiprokal) menanyakan seberapa jauh ke bawah hit *pertama* berada. Untuk setiap pengguna ambil $1/\text{peringkat}$ dari hit pertama: hit pertama di peringkat 1 bernilai 1, di peringkat 2 bernilai 0.5, di peringkat 4 bernilai 0.25. MRR adalah rata-ratanya atas pengguna. Untuk tiga pengguna dengan hit pertama di peringkat 1, 2, dan 4: $(1 + 0.5 + 0.25)/3 = 0.583$. Ia menghargai penempatan *sesuatu* yang bagus di posisi paling atas, dan mengabaikan semua yang datang setelah hit pertama.
 
 ### Average precision (AP)
 
@@ -136,6 +173,8 @@ $$
 Dengan hit pada posisi 1 dan 2, kita akan mendapat $\frac{1}{2}(1 + 1) = 1$. Membagi dengan $R$ (bukan dengan jumlah hit) menghukum positif yang tidak pernah muncul. Namun AP bersifat biner: pesanan dan klik sama-sama dihitung sebagai "hit", jadi untuk relevansi bergradasi kita memakai DCG.
 
 ### Cumulative gain, dan diskon
+
+Versi sederhana dari apa yang akan datang: kita memberi setiap hit sejumlah poin (lebih banyak untuk pesanan daripada klik), lalu mengecilkan poin untuk item yang lebih rendah di daftar, karena lebih sedikit orang yang menggulir sejauh itu. Menjumlahkan semuanya menghasilkan **DCG**. Membaginya dengan skor terbaik yang mungkin menghasilkan **NDCG**, angka antara 0 dan 1. Langkah-langkah di bawah menyusunnya sepotong demi sepotong.
 
 Misalkan $\text{rel}_i$ adalah label (0, 1, 2, atau 3) item pada peringkat $i$, dengan peringkat dihitung dari 1. Skor bergradasi yang paling naif hanya menjumlahkannya:
 
@@ -169,6 +208,8 @@ Mengapa logaritma? Penurunan antara slot 1 dan 2 besar, antara slot 19 dan 20 da
 
 ### Normalisasi: NDCG
 
+Dalam satu kalimat: **NDCG adalah DCG Anda sebagai pecahan dari DCG terbaik yang bisa Anda capai**, seperti mendapat 17 dari 20 pada sebuah ujian. Skala ini membuat pengguna dengan banyak positif masa depan sebanding dengan pengguna yang hanya punya satu.
+
 DCG tidak dapat dibandingkan antarpengguna. Pengguna dengan satu klik masa depan memiliki DCG maksimum 1; pengguna dengan lima pesanan masa depan memiliki maksimum yang jauh lebih tinggi. Untuk merata-ratakan antarpengguna kita memerlukan skala bersama. Solusinya adalah membagi dengan **DCG ideal** (IDCG): DCG dari urutan terbaik yang mungkin atas positif masa depan pengguna itu, yaitu diurutkan menurut gain, tertinggi lebih dulu.
 
 $$
@@ -176,6 +217,14 @@ $$
 $$
 
 NDCG 1 berarti "Anda mendaftar setiap positif masa depan, terbaik lebih dulu". Skor 0 berarti Anda tidak menemukan satu pun. Angka akhir yang dilaporkan adalah rata-rata NDCG atas semua pengguna yang dievaluasi.
+
+**Contoh 3 item.** Daftar kita punya tiga slot. Slot 1 adalah casing ponsel yang tak pernah disentuh Sari (label 0). Slot 2 adalah kantong makanan kucing yang ia pesan (label 3, gain 7). Slot 3 adalah mainan yang ia masukkan ke keranjang (label 2, gain 3). Ia juga mengklik sebuah sikat yang tidak pernah kita tampilkan (label 1, gain 1). Dengan kata-kata, setiap slot menyumbang (gain) dibagi (diskon slot itu), dengan diskon 1, 0.631, dan 0.5 untuk slot 1, 2, dan 3.
+
+$$
+\text{DCG@3} = \frac{0}{1} + \frac{7}{\log_2 3} + \frac{3}{\log_2 4} = 0 + 4.417 + 1.5 = 5.917 .
+$$
+
+Urutan ideal positif-positifnya menaruh pesanan lebih dulu, lalu keranjang, lalu klik: $\text{IDCG@3} = 7 + 3/\log_2 3 + 1/\log_2 4 = 7 + 1.893 + 0.5 = 9.393$. Jadi $\text{NDCG@3} = 5.917 / 9.393 = 0.630$. Seandainya kita menaruh pesanan di slot 1 dan keranjang di slot 2, kita akan mencapai $7 + 1.893 + 0 = 8.893$, NDCG sebesar 0.947: hit yang sama, urutan lebih baik, skor lebih tinggi.
 
 Perhatikan kehalusan pada daftar ideal: ia memuat *setiap* positif masa depan milik pengguna, termasuk item yang tidak mungkin ditemukan sistem rekomendasi mana pun (misalnya item yang kehabisan stok pada cutoff, atau yang ditemukan pengguna lewat tautan dari teman). Itulah yang membuat NDCG@K jujur: ia diukur terhadap perilaku nyata pengguna, bukan terhadap apa yang dapat direkomendasikan.
 
@@ -195,6 +244,10 @@ $$
 
 Dari semua item yang boleh kita rekomendasikan, berapa bagian yang pernah muncul di top $K$ milik setidaknya satu pengguna? Untuk marketplace ini bukan sekadar estetika: penjual yang itemnya tidak pernah ditampilkan tidak akan pernah menjual. Coverage *bukan* skor kualitas yang berdiri sendiri (sistem rekomendasi acak memiliki coverage sempurna dan akurasi terburuk), jadi pakailah ia sebagai **guardrail** di samping metrik akurasi.
 
+Versi sederhana: coverage menanyakan "seberapa banyak etalase toko yang pernah kita pakai?" Jika sebuah toko punya 2,000 item dan di seluruh pengguna kita hanya pernah merekomendasikan 200 item berbeda, coverage-nya $200/2000 = 10\%$.
+
+**Diversity** (keragaman) adalah gagasan yang berkaitan tetapi berbeda: variasi *di dalam satu daftar milik seorang pengguna* (misalnya berapa kategori produk berbeda di 20 teratasnya), sedangkan coverage melihat variasi *di seluruh pengguna*. Daftar berisi dua puluh casing ponsel tidak beragam walaupun coverage toko tinggi. Bab 11 mengukur diversity sebagai jumlah kategori berbeda di 20 teratas.
+
 ### Candidate recall: batas atas
 
 Sistem rekomendasi produksi, termasuk milik kita, bersifat **multi-tahap**: tahap pertama yang murah memilih beberapa ratus *kandidat* (*candidate*) dari ribuan (atau jutaan) item, lalu tahap kedua yang lebih cerdas mengurutkannya. Tahap kedua hanya bisa mengurutkan ulang apa yang disediakan tahap pertama, sehingga
@@ -204,6 +257,8 @@ $$
 $$
 
 (dirata-ratakan atas pengguna) adalah **batas atas** recall pemeringkatan akhir: jika *candidate generation* tidak pernah mengambil item yang dibeli pengguna, tidak ada ranker yang bisa menaruhnya di slot 1. Ketika ranker baru mengecewakan, periksa angka ini lebih dulu. Bab 8 membahas cara menaikkannya.
+
+Contoh kecil: misalkan positif masa depan Sari adalah kantong makanan kucing dan sebuah mainan, dan tahap pertama (daftar pendek 300 kandidat) memuat mainan itu tetapi tidak makanan kucingnya. Candidate recall-nya $1/2 = 0.5$, dan ranker yang sempurna pun tak akan pernah mencapai recall di atas 0.5 untuk dia. Nilai maksimum yang ditetapkan tahap pertama ini disebut **batas atas recall** (*recall ceiling*).
 
 ## Penelusuran kode: `recsys/evaluate.py`
 

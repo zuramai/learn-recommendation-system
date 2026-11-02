@@ -13,19 +13,40 @@ Both of them are right to worry. A recommender has no single correct output, and
 - What **coverage** and **candidate recall** measure, and why a recommender can look "accurate" while being useless.
 - How `recommender/recsys/evaluate.py` implements all of this in about forty lines of pandas, line by line.
 
-## Intuition: grading an exam you did not write the answers to
+## Intuition: testing a forecaster on last month's weather
 
-Imagine you are a teacher who wants to know whether a student has learned algebra. You would never hand out an exam, let the student see the answer key, and then grade the same exam. You would hold back questions the student has not seen. And you would not use a *fortune-telling* exam where the questions are pulled from next year's syllabus either; the exam has to match the knowledge you could reasonably have had at the time.
+To test a recommender, we **pretend it is the past, ask it to predict, then check against what actually happened next.**
 
-Evaluating a recommender follows the same rules, with one twist: the "answer key" is the future. We freeze the world at a moment in time (the **cutoff**), build recommendations using only what was known before it, and then look at what users actually did *after* it. If our top-20 list contains the cat-food bag the user later ordered, we score points; if it contained forty phone cases she never touched, we do not.
+Think of a weather forecaster. You give them weather records **up to 1 March** and ask, "What will 2–8 March look like?" You already know what happened, because it is in your records, but you hide it from them. You compare their forecast with reality; that comparison is the score. *Cheating* would be letting them read the 5 March newspaper first.
 
-Two things follow. First, **the student must not see the answer key**: anything computed from data after the cutoff is forbidden when we produce recommendations. This is *leakage*, the number-one cause of results that look wonderful offline and collapse in production. Second, **one exam is never enough**: a recommender can score well on accuracy and still show every user the same twenty bestsellers, so we need metrics for accuracy, ranking quality, breadth, and the ceiling imposed by earlier pipeline stages. Different answers also deserve different weights: an order is worth more than a click, and slot 1 more than slot 18.
+Now the same test for a shop recommender. Our records cover 60 days, and shopper Sari did this:
+
+| Day | What shopper Sari did |
+|---|---|
+| 1–52 | Browses cat toys, clicks several cat-food brands, adds one to cart, doesn't buy |
+| *53 = cutoff* | *we freeze time here* |
+| 55 | **Orders a 2 kg bag of cat food** |
+
+The recommender sees only days 1–52 and produces Sari's top 20 items. We then open the answer key (what happened after day 53): did the cat-food bag appear in her list, and how high? If it is in the list, we score points, more if it is near the top. If the list is twenty phone cases she never touched, we score nothing.
+
+The **cutoff** (day 53 here) is the moment where we freeze the world. It has two jobs:
+
+1. **It stops cheating.** Everything the recommender is allowed to use (clicks, carts, orders, item popularity, any feature computed from them) must come from *before* the cutoff.
+2. **It defines the answer key.** The **labels** are what users did in the 7 days *after* the cutoff, from day 53 up to the end of the data at day 60. These are the "right answers" we grade against.
+
+**Leakage** is cheating by accident: information from after the cutoff slips into what the recommender sees. Here is a concrete case. Suppose we build a feature called "times this user ordered this item", and we compute it over all 60 days instead of days 1–52. For Sari and the cat-food bag it would contain the very order on day 55 that we are trying to predict. The recommender then looks brilliant, because it is simply reading the answer. But in production, on day 53, the day-55 order has not happened yet, so the feature is empty and the model collapses. Leakage is the number-one cause of results that look wonderful offline and fail in production. In chapter 9 we build such a leaky column on purpose: it lifts the ranking score NDCG@20 (explained below) from an honest 0.2116 to 0.5035, a gain that is entirely fake.
+
+The second lesson: **one metric is never enough.** A recommender can score well on accuracy and still show every user the same twenty bestsellers. So we need metrics for accuracy, for ranking quality, for breadth, and for the ceiling imposed by earlier pipeline stages. Different answers also deserve different weights: an order is worth more than a click, and slot 1 more than slot 18.
 
 ## Offline versus online evaluation
 
 There are two places to measure a recommender, and they answer different questions.
 
+In weather terms: **offline** evaluation is the test above, run on recorded history. **Online** evaluation is letting the forecaster publish real forecasts today and seeing how the public reacts.
+
 **Online evaluation** means putting the model in front of real users and watching what happens. The standard tool is the **A/B test**: randomly split users into a control group (the old model) and a treatment group (the new one), then compare business metrics, such as click-through rate $\text{CTR} = \frac{\text{clicks}}{\text{impressions}}$, conversion rate, orders per session, or gross merchandise value (GMV) per user. Online results are the ground truth. They capture everything: novelty effects, page layout, latency, the fact that users react to what they are shown. But they are slow (days or weeks to reach statistical significance), expensive (a bad model hurts real revenue while you learn it is bad), and you can only run a handful of experiments at a time.
+
+Three terms in that paragraph in plain words. An **A/B test** is a fair race between two versions: a coin flip decides, for each user, whether they see version A (the current model) or version B (the new model), at the same time. Because both groups live through the same week, a weekend sale or a holiday affects both equally, so a difference between them is caused by the model. **CTR** (click-through rate) is the share of shown items that got clicked: 3 clicks on 100 impressions (times an item was displayed) is a CTR of 3%. **GMV** (gross merchandise value) is the total money value of everything sold.
 
 **Offline evaluation** replays history. You take logged behaviour, pretend it is the day before something happened, produce recommendations, and score them against what happened next. It is fast (minutes), free, repeatable, and you can test a hundred variants in an afternoon. Its weakness is that history only contains what users did in response to the *old* system's choices. Items that the old system never showed have no clicks; a model that would surface them gets no credit. Offline numbers are a **proxy**.
 
@@ -38,6 +59,8 @@ Source: Amatriain & Basilico, Netflix Technology Blog, 2012
 :::
 
 ## Time-based splits, and why random splits leak
+
+A **time-based split** means we pick a date, use everything before it to build the recommender, and grade it only on what happens after it, as in the Sari table above. The usual alternative, a **random split**, shuffles all events together and sets some aside for testing. That is fine for photos of cats and dogs, but not here, as the next paragraph shows.
 
 Machine-learning tutorials usually say "shuffle your data and hold out 20% for testing". For recommenders this advice is dangerous. Suppose we have 60 days of events and we shuffle them into 80% train and 20% test. A click on day 52 might land in the training set while a click by the same user on day 14 lands in the test set. The model then "predicts" day 14 using knowledge of day 52. Concretely it can learn:
 
@@ -88,6 +111,8 @@ Splitting events correctly is only half of it: a feature such as "this item's or
 
 ## What we are measuring: labels and ranked lists
 
+Two plain-words definitions first. A **ranked list** is just the items we show a user, best first (the top of a product feed). **Graded relevance** means that not every success counts the same: a user who *orders* an item tells us more than one who merely *clicks* it, so we give each outcome a number (a *grade*) instead of a plain yes or no. The table below is that grading.
+
 Before the formulas, let us fix vocabulary. For a given user $u$ and cutoff $t_c$, the recommender produces a **ranked list** of items $r_1, r_2, \dots, r_K$, best first. We compare it with what the user actually did during the label window. The repo derives a graded **label** for every (user, item) pair the user touched:
 
 | Behaviour in label window | Label |
@@ -105,6 +130,8 @@ Let us call the items with a positive label the user's **future positives**, and
 
 ### Precision@K and recall@K
 
+The suffix **@K** (read "at K") just means "look only at the first $K$ items of the list", for example the top 20 of the page. A **hit** is an item in that list that the user did later engage with.
+
 The two most basic questions about a top-$K$ list are:
 
 - **Precision@K**: of the $K$ items we showed, what fraction did the user engage with?
@@ -117,7 +144,17 @@ $$
 
 A "hit" is a list item that is a future positive. For one user these are just a count divided by a different number. Precision cares about *waste* (every slot is expensive screen space), recall cares about *coverage of what the user wanted*. In a marketplace with thousands of items per category, and users who engage with a handful in a week, precision values are naturally tiny; recall is easier to read and is what this book reports most often. When $K$ is fixed and large relative to $R$, precision and recall carry the same information up to scaling, which is why we mostly show recall.
 
+Tiny example with Sari. Suppose we show 5 items. Later, Sari engages with 4 items (the bag of cat food, a toy, a litter box, a brush), and 2 of those were in our 5. Then precision@5 is $2/5 = 0.4$ ("two in five slots were useful") and recall@5 is $2/4 = 0.5$ ("we showed half of what she wanted"). If we showed 50 items and caught all 4, recall would be 1 but precision only $4/50 = 0.08$: that is why we look at both.
+
 Both ignore **order** inside the top $K$: finding a hit at slot 1 or slot 20 gives the same score. On a real page that is wrong, since slot 1 is seen by nearly everyone and slot 20 requires scrolling. We need position-aware metrics.
+
+### Hit rate and MRR: two quick position checks
+
+Papers and dashboards often use two simpler cousins of the metrics above. This book does not report them, but you will meet them, so here they are.
+
+**Hit rate@K** asks a yes/no question per user: was *at least one* of the top $K$ items a hit? The hit rate is the share of users for whom the answer is yes. If 4 of 10 users found something relevant in their top 20, hit rate@20 is 0.4. It is easy to read, but it gives the same credit for one hit as for ten.
+
+**MRR** (mean reciprocal rank) asks how far down the list the *first* hit is. For each user take $1/\text{rank}$ of the first hit: first hit at rank 1 scores 1, at rank 2 scores 0.5, at rank 4 scores 0.25. The MRR is the average over users. For three users with first hits at ranks 1, 2 and 4: $(1 + 0.5 + 0.25)/3 = 0.583$. It rewards putting *something* good at the very top, and ignores everything after the first hit.
 
 ### Average precision (AP)
 
@@ -136,6 +173,8 @@ $$
 With hits at positions 1 and 2 instead we would get $\frac{1}{2}(1 + 1) = 1$. Dividing by $R$ (not by the number of hits) penalises positives that never appear. AP is binary, though: an order and a click are the same "hit", so for graded relevance we use DCG.
 
 ### Cumulative gain, and the discount
+
+Plain version of what comes next: we give each hit some points (more for an order than for a click), and shrink the points for items lower in the list, because fewer people scroll that far. Adding it all up gives **DCG**. Dividing by the best score that was possible gives **NDCG**, a number between 0 and 1. The steps below build it piece by piece.
 
 Let $\text{rel}_i$ be the label (0, 1, 2 or 3) of the item at rank $i$, counting ranks from 1. The most naive graded score just adds them up:
 
@@ -169,6 +208,8 @@ Why a logarithm? The drop between slots 1 and 2 is big, between slots 19 and 20 
 
 ### Normalising: NDCG
 
+In one sentence: **NDCG is your DCG as a fraction of the best DCG you could have had**, like scoring 17 out of 20 on a test. The scale makes users with many future positives comparable to users with one.
+
 DCG is not comparable across users. A user with one future click has a maximum possible DCG of 1; a user with five future orders has a maximum far higher. To average over users we need a common scale. The fix is to divide by the **ideal DCG** (IDCG): the DCG of the best possible ordering of that user's future positives, namely sorted by gain, highest first.
 
 $$
@@ -176,6 +217,14 @@ $$
 $$
 
 An NDCG of 1 means "you listed every future positive, best first". A score of 0 means you found none. The final reported number is the mean NDCG over all evaluated users.
+
+**A 3-item walk-through.** Our list has three slots. Slot 1 is a phone case Sari never touched (label 0). Slot 2 is the cat-food bag she ordered (label 3, gain 7). Slot 3 is a toy she added to the cart (label 2, gain 3). She also clicked a brush that we never listed (label 1, gain 1). In words, each slot contributes (gain) divided by (discount of that slot), with discounts 1, 0.631 and 0.5 for slots 1, 2 and 3.
+
+$$
+\text{DCG@3} = \frac{0}{1} + \frac{7}{\log_2 3} + \frac{3}{\log_2 4} = 0 + 4.417 + 1.5 = 5.917 .
+$$
+
+The ideal ordering of her positives puts the order first, then the cart, then the click: $\text{IDCG@3} = 7 + 3/\log_2 3 + 1/\log_2 4 = 7 + 1.893 + 0.5 = 9.393$. So $\text{NDCG@3} = 5.917 / 9.393 = 0.630$. Had we put the order in slot 1 and the cart in slot 2, we would have reached $7 + 1.893 + 0 = 8.893$, an NDCG of 0.947: the same hits, a better order, a higher score.
 
 Note the subtlety in the ideal list: it contains *every* future positive the user has, including items that no recommender could have found (for instance an item that was out of stock at the cutoff, or one the user discovered via a friend's link). That makes NDCG@K honest: it is measured against the user's real behaviour, not against what was recommendable.
 
@@ -195,6 +244,10 @@ $$
 
 Of all items we are allowed to recommend, what fraction ever appears in some user's top $K$? For a marketplace this is not just aesthetics: sellers whose items are never shown never sell. Coverage is *not* a quality score on its own (a random recommender has perfect coverage and terrible accuracy), so use it as a **guardrail** next to the accuracy metrics.
 
+Plain version: coverage asks "how much of the shop window do we ever use?" If a shop has 2,000 items and across all users we only ever recommend 200 distinct ones, coverage is $200/2000 = 10\%$.
+
+**Diversity** is a related but different idea: variety *inside one user's list* (for example, how many different product categories appear in her top 20), whereas coverage looks at variety *across all users*. A list of twenty phone cases is not diverse even if the shop's coverage is high. Chapter 11 measures diversity as the number of distinct categories in the top 20.
+
 ### Candidate recall: the ceiling
 
 Production recommenders, including ours, are **multi-stage**: a cheap first stage picks a few hundred *candidates* out of thousands (or millions) of items, and a smarter second stage orders them. The second stage can only reorder what the first stage provides, so
@@ -204,6 +257,8 @@ $$
 $$
 
 (averaged over users) is an **upper bound** on the recall of the final ranking: if candidate generation never retrieves the item the user buys, no ranker can put it at slot 1. When a new ranker disappoints, check this number first. Chapter 8 is about raising it.
+
+A tiny example: suppose Sari's future positives are the cat-food bag and a toy, and the first stage (the shortlist of 300 candidates) contains the toy but not the cat food. Candidate recall is $1/2 = 0.5$, and even a perfect ranker can never reach a recall above 0.5 for her. This maximum, set by the first stage, is called the **recall ceiling**.
 
 ## Code walkthrough: `recsys/evaluate.py`
 
