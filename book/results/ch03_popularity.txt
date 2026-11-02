@@ -1,0 +1,58 @@
+
+=== Building the baselines ===
+m (mean rating_count) = 105.2, C (global mean rating) = 4.324
+
+Smoothing examples (few ratings are pulled toward C, many ratings are trusted):
+      rating_avg  rating_count  bayes
+0            4.5           0.0  4.324
+892          4.4           0.0  4.324
+1840         4.4          34.0  4.343
+610          5.0        2718.0  4.975
+
+eval users with no category signal (fall back to pop_7d): 21 of 947
+
+=== Results (top 50 per user, same labels and metrics for everyone) ===
+                      recall@5  recall@10  recall@20  recall@50  order_recall@20  ndcg@20  coverage@20
+method                                                                                                
+random                  0.0026     0.0055     0.0090     0.0210           0.0081   0.0035       1.0000
+pop_all_time            0.0323     0.0515     0.0914     0.1575           0.1202   0.0527       0.0087
+pop_7d                  0.0310     0.0493     0.0786     0.1335           0.1066   0.0475       0.0087
+pop_decay               0.0318     0.0519     0.0813     0.1557           0.1091   0.0491       0.0087
+bayesian_rating         0.0216     0.0329     0.0648     0.1178           0.0716   0.0325       0.0087
+pop_in_my_categories    0.0926     0.1425     0.2173     0.3529           0.3050   0.1302       0.2164
+
+=== Top 5 items of the global popularity methods ===
+
+pop_all_time:
+ item_id                           title   price
+    2381              Garuda Makeup Lite 54100.0
+    1359 Garuda Coffee & Tea Best Seller 59800.0
+    2015           Garuda Makeup Premium 87200.0
+    1469    Sakura Coffee & Tea Original 65200.0
+     896         Sakura Baby Clothes Pro 37300.0
+
+pop_7d:
+ item_id                           title   price
+    2381              Garuda Makeup Lite 54100.0
+    1359 Garuda Coffee & Tea Best Seller 59800.0
+    2015           Garuda Makeup Premium 87200.0
+    1469    Sakura Coffee & Tea Original 65200.0
+    1324        Lumi Coffee & Tea Import 28700.0
+
+pop_decay:
+ item_id                           title    price
+    2381              Garuda Makeup Lite  54100.0
+    2015           Garuda Makeup Premium  87200.0
+    1359 Garuda Coffee & Tea Best Seller  59800.0
+    1469    Sakura Coffee & Tea Original  65200.0
+     873       Lumi Baby Formula Premium 202100.0
+
+=== Decay weights (half-life 7 days) ===
+age  0 days -> weight 1.0000
+age  1 days -> weight 0.9057
+age  3 days -> weight 0.7430
+age  7 days -> weight 0.5000
+age 14 days -> weight 0.2500
+age 21 days -> weight 0.1250
+age 30 days -> weight 0.0513
+age 53 days -> weight 0.0053

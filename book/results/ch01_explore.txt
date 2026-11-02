@@ -1,0 +1,46 @@
+
+=== Table sizes ===
+categories          25
+shops              150
+items            2,500
+users            1,500
+sessions        19,455
+searches         8,680
+events         276,378
+
+=== Event funnel (all 60 days) ===
+event_type         count    % of impressions    % of previous step
+impression       233,460             100.00%                      
+click             24,726              10.59%                10.59%
+add_to_cart       10,619               4.55%                42.95%
+order              5,858               2.51%                55.17%
+hide               1,594               0.68%                      
+return               121               0.05%                      
+
+=== Events per day ===
+median clicks/day on ordinary days : 347
+mean clicks/day on payday days     : 488
+sale day 2026-08-08 (month == day): 1,386 clicks, 405 orders
+sale day 2026-09-09 (month == day): 1,262 clicks, 410 orders
+weekend vs weekday mean clicks/day  : 496 vs 376
+
+=== Popularity concentration (clicks + carts + orders per item) ===
+top  1% of items (  25) get  12.5% of interactions
+top 10% of items ( 250) get  50.3% of interactions
+top 20% of items ( 500) get  68.6% of interactions
+items with zero interactions: 317 of 2500
+
+=== Sparsity of the user x item matrix (before cutoff) ===
+users with interactions : 1,408
+items with interactions : 2,120
+non-zero cells          : 18,256
+density                 : 0.612%  (sparsity 99.388%)
+
+=== Clicks per user (before cutoff) ===
+p10 :      1
+p25 :      5
+p50 :     11
+p75 :     20
+p90 :     31
+p99 :     56
+mean: 14.2   max: 106   users with 0 clicks: 92

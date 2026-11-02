@@ -1,0 +1,65 @@
+
+=== Item text and TF-IDF ===
+Example documents:
+  'Volt Skincare Lokal Skincare Volt Beauty'
+  'Kirana Kitchenware Lokal Kitchenware Kirana Home & Living'
+  'Lumi Kitchenware Best Seller Kitchenware Lumi Home & Living'
+
+items: 2495, vocabulary: 64 terms, non-zeros per item: 4.8
+
+Lowest IDF (common, uninformative):
+living         2.861
+home           2.861
+baby           2.896
+mother         2.896
+electronics    3.008
+Highest IDF (rare, discriminative):
+men             4.518
+smartwatches    4.532
+skincare        4.546
+shampoo         4.648
+sneakers        4.695
+
+=== User profiles (decay-weighted mean of interacted item vectors) ===
+profiles built for 919 of 947 eval users; 28 fall back to pop_7d
+
+Strongest profile terms for user 894:
+diapers    0.809
+baby       0.301
+mother     0.301
+bamboo     0.148
+aurora     0.145
+garuda     0.117
+
+=== Results (cosine(profile, item), top 50 per user) ===
+               recall@5  recall@10  recall@20  recall@50  order_recall@20  ndcg@20  coverage@20
+method                                                                                         
+content_tfidf    0.0589     0.0837     0.1378     0.2416           0.1834   0.0909       0.9892
+
+=== Five nearest items for three example items ===
+
+Query: item 12 'Aurora Coffee & Tea Import' (Coffee & Tea)
+   1.000  item 2399  Aurora Coffee & Tea Import  [Coffee & Tea]
+   0.953  item 449   Aurora Coffee & Tea Lokal  [Coffee & Tea]
+   0.953  item 1016  Aurora Coffee & Tea Lokal  [Coffee & Tea]
+   0.952  item 1936  Aurora Coffee & Tea Lite  [Coffee & Tea]
+   0.952  item 1476  Aurora Coffee & Tea Premium  [Coffee & Tea]
+
+Query: item 43 'Volt Sneakers Original' (Sneakers)
+   0.936  item 814   Volt Sneakers Lite  [Sneakers]
+   0.936  item 838   Volt Sneakers Lite  [Sneakers]
+   0.936  item 1531  Volt Sneakers Lite  [Sneakers]
+   0.935  item 1143  Volt Sneakers Premium  [Sneakers]
+   0.934  item 565   Volt Sneakers Pro  [Sneakers]
+
+Query: item 82 'Mega Cat Food Original' (Cat Food)
+   1.000  item 1283  Mega Cat Food Original  [Cat Food]
+   0.948  item 560   Mega Cat Food Lokal  [Cat Food]
+   0.947  item 1782  Mega Cat Food Lite  [Cat Food]
+   0.947  item 520   Mega Cat Food Premium  [Cat Food]
+   0.947  item 1655  Mega Cat Food Premium  [Cat Food]
+
+=== Mean cosine similarity within / across the three heat-map categories ===
+Coffee & Tea    0.752    0.084    0.014
+Snacks          0.084    0.633    0.037
+Sneakers        0.014    0.037    0.681
