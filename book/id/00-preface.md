@@ -114,7 +114,7 @@ Lalu buka `http://localhost:5173`. Data seed menyertakan akun demo seperti `user
 
 Log marketplace asli bersifat privat, dan dataset publik tidak memuat posisi, durasi tinggal (*dwell time*), dan stok, sehingga buku ini memakai **marketplace simulasi** yang disertakan dalam repositori. Karena kita sendiri yang menulis simulatornya, kita juga tahu kebenaran tersembunyi di balik perilaku itu, yang dipakai Bab 1 untuk menunjukkan bagaimana data log memelintir apa yang sebenarnya diinginkan pengguna.
 
-Simulasi bawaan, yang dikonfigurasi di `recommender/recsys/simulate.py`, memiliki 1.500 pengguna, 2.500 item, 150 toko, dan 60 hari aktivitas, dengan *seed* tetap. Skrip Bab 1 mengonfirmasi ukuran tabelnya:
+Simulasi bawaan, yang dikonfigurasi di `recommender/recsys/simulate.py`, memiliki 1,500 pengguna, 2,500 item, 150 toko, dan 60 hari aktivitas, dengan *seed* tetap. Skrip Bab 1 mengonfirmasi ukuran tabelnya:
 
 ```output
 file: results/ch01_explore.txt
@@ -162,7 +162,7 @@ Bab 1 sampai 14 mengikuti templat yang sama, sehingga Anda selalu tahu posisi An
 
 ### Konvensi visual dan tipografi
 
-Kode diambil langsung dari berkas repositori, dan blok keluaran disalin dari berkas hasil yang ditangkap. Setiap angka dalam paragraf juga muncul di blok keluaran atau berkas JSON di bawah `book/results/`. Matematika sebaris tampak seperti $a \cdot b$; Bab 2 membangun NDCG dari nol.
+Kode diambil langsung dari berkas repositori, dan blok keluaran disalin dari berkas hasil yang ditangkap. Setiap angka dalam paragraf juga muncul di blok keluaran atau berkas JSON di bawah `book/results/`. Matematika sebaris tampak seperti $a \cdot b$; Bab 2 membangun NDCG dari nol. Angka ditulis dengan titik desimal, sama seperti pada keluaran program.
 
 Empat jenis kotak callout menyela teks. Tampilannya di PDF seperti berikut:
 
