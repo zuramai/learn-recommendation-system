@@ -4,9 +4,7 @@
 
 It is 08:55 on a Monday and Rina, a product manager at a marketplace not unlike Shopee, is staring at a dashboard. Her platform lists millions of products. Her buyers open the app, swipe for ninety seconds, and leave. Some of them leave happy, with a phone case in their cart. Most of them leave empty-handed, because the thing they would have loved was number 48,213 in a list nobody scrolled to.
 
-Her engineering lead says the sentence that starts every recommender project: "We need to show each person the right things." Rina nods. Then she asks the question that actually matters: *what are the "things", who is the "person", and how will we know whether we got it right?*
-
-This chapter answers those three questions before we write a single line of modelling code. A recommender system is a data product, and every algorithm in the following thirteen chapters is only as good as the problem statement and the data underneath it. We will meet the simulated marketplace that powers every experiment in this book, look at the raw tables an app really logs, and learn to read the shape of that data: how sparse it is, how unequal, and how much it breathes with the calendar.
+Her engineering lead says the sentence that starts every recommender project: "We need to show each person the right things." Rina asks the question that matters: *what are the things, who is the person, and how will we know we got it right?* This chapter answers those questions before any modelling code, and introduces the simulated marketplace used in every experiment in this book.
 
 **What you'll learn**
 
@@ -28,7 +26,7 @@ A recommender system is the second assistant, automated and multiplied by a few 
 
 The assistant's brain has to solve a problem that sounds easy and is brutal in practice: given a user and a very large set of items, produce a short ordered list that the user is likely to value. "Short" matters because screens are small. "Ordered" matters because people do not scroll. "Likely to value" matters because we have to turn a fuzzy human notion into something a computer can optimise.
 
-There is one more piece of the analogy worth keeping. The second assistant does not compare you against *every product in the market* when you walk in. That would take forever. Instinctively she first narrows the market to maybe thirty things that could plausibly interest you ("cat things, kitchen things, trending things") and only then decides the order in which to show them. That is exactly the two-stage structure that every large-scale recommender uses, and we will formalise it next.
+She also does not compare you against *every product in the market*. She first narrows it to thirty plausible things and only then decides the order: the two-stage structure every large recommender uses.
 
 ## The algorithm: framing the problem
 
@@ -61,17 +59,9 @@ flowchart LR
 
 This funnel is the skeleton of the book. Chapters 3 to 7 are about producing *a* score, with progressively smarter methods, and we will evaluate each of them as if it alone had to do the whole job. From chapter 8 onwards we put them together the way real systems do.
 
-### Personalisation, and what "right" means
+### Personalisation
 
-A **non-personalised** recommender returns the same list to everyone: "most popular this week". A **personalised** recommender conditions on the user. Non-personalised baselines are far more competitive than newcomers expect (chapter 3 will show it with numbers), so the goal of personalisation is not to win every comparison but to win where it matters: for the users and moments where the popular choice is wrong.
-
-What is "right"? There are at least three defensible answers, and they pull in different directions:
-
-- *The user's answer*: items I would actually enjoy or need.
-- *The business's answer*: items that lead to orders, revenue or retention.
-- *The ecosystem's answer*: a healthy spread of sellers and products, not only the top 1%.
-
-In this book the training signal is behaviour (clicks, carts, orders) so the user's and the business's answers are mostly merged. We will return to the ecosystem in chapters 11 and 14.
+A **non-personalised** recommender returns the same list to everyone ("most popular this week"); a **personalised** one conditions on the user. Popularity baselines are more competitive than newcomers expect (chapter 3), so personalisation must win where it matters: where the popular choice is wrong. "Right" can mean the user's answer (items I would enjoy), the business's (orders, revenue) or the ecosystem's (a healthy spread of sellers); here behaviour is the signal, merging the first two.
 
 ### Explicit versus implicit feedback
 
@@ -89,7 +79,7 @@ $$
 
 A user who clicked an item twice, added it to the cart once and later bought it has an interaction strength of $2\cdot 1 + 1\cdot 3 + 1\cdot 5 = 10$ for that item. Hand-sized, but this is precisely how the interaction matrix of chapters 5 and 6 is built from raw events.
 
-Two more event types are *negative* signals: `hide` (the "not interested" button on the home feed) and `return` (the item was sent back). They are rare in the logs, but rare does not mean unimportant. One `hide` tells you more about dislike than a thousand silent impressions.
+Two event types are *negative*: `hide` ("not interested") and `return`. They are rare, but one `hide` says more about dislike than a thousand silent impressions.
 
 ### Hidden truth versus logged data
 
@@ -140,15 +130,7 @@ Marketplace traffic is not stationary. People shop more on weekends, more right 
 
 The simulator reproduces this with a small, readable function, `_day_weights`. Every day starts with weight $1$. Then the weight is multiplied by $1.2$ on Saturdays and Sundays, by $1.4$ on payday days (the 25th through the 1st of the next month) and by $3.0$ on a "double date" sale day, which it detects as *month equals day*. Finally the weights are normalised to sum to one so that they become a probability distribution over days. In this 60-day window starting 1 August 2026, that means the 8.8 sale (8 August) and the 9.9 sale (9 September) both occur. The module docstring only mentions 9.9, but the rule `d.month == d.day` fires for any double date, which is why 8.8 is also boosted.
 
-**Worked example.** Take three days and their raw weights before normalisation:
-
-- an ordinary Wednesday: $1.0$
-- Saturday the 29th (weekend and payday): $1.2 \times 1.4 = 1.68$
-- Saturday, 8 August (weekend and sale): $1.2 \times 3.0 = 3.6$
-
-Their normalised shares are the raw weight divided by the sum over all 60 days. A simple consequence: the sale day gets $3.6$ times the traffic budget of an ordinary day *before* sampling noise, and the code boosts discounts by 0.2 and conversion on those days too, so the extra clicks are more likely to become orders.
-
-Why does this matter for recommenders? Because any model trained on this data will *see* these spikes. If you evaluate on a week that contains a sale and train on weeks that do not, the numbers will be strangely good or strangely bad and you will wonder why. Time is also the reason why chapter 2 insists on time-based splits.
+**Worked example.** A Saturday sale day (such as 8 August) has raw weight $1.2\times3.0=3.6$ against $1.0$ for an ordinary Wednesday, before normalisation.
 
 ### The raw tables
 
@@ -183,7 +165,7 @@ A hand-sized illustration: a store with 1,000 users and 10,000 items where the u
 
 **The long tail.** Interactions are not spread evenly across items. A few items are extremely popular; most are rarely touched. Sort the items by interaction count and the resulting curve drops steeply and then runs along the floor for a long time: a "head" and a "tail". A useful summary is the share of all interactions that the top $p\%$ of items receive. The more concentrated the share, the more a popularity baseline wins by default, and the harder it is to make a recommender that visibly beats it.
 
-The tail is also where personalisation pays. A system that only ever recommends the head sends every user to the same few products. The tail contains the products that match unusual tastes, and sellers whose products never get a chance.
+The tail is where personalisation pays: it holds the products matching unusual tastes, and sellers who never get a chance.
 
 ::: fact
 The idea that the "tail" of a popularity distribution is economically meaningful was popularised by Chris Anderson's article "The Long Tail" in *Wired* in October 2004. He argued that online retail, free of shelf-space limits, can profit by serving niche products that in aggregate rival the hits. Whether the tail is really where the money is remains debated, but the vocabulary of head and tail is now standard in recommender work.
@@ -201,15 +183,10 @@ We will read three pieces of real code: the schema helper that prints the data c
 
 ```include
 path: recommender/recsys/schema.py
-symbol: Column
-```
-
-```include
-path: recommender/recsys/schema.py
 symbol: Table
 ```
 
-The word **grain** is worth underlining. The most common modelling mistake in data work is to forget what one row represents. For `events`, one row is "one user action on one item", not one session, not one user. Every aggregate you compute later (a click count per user, a CTR per item) is a `GROUP BY` over this grain, and getting the grain wrong silently double-counts.
+The word **grain** matters: for `events`, one row is one user action on one item, and every later aggregate is a `GROUP BY` over it; a wrong grain silently double-counts.
 
 The `describe` function turns the contract into a printable report, which is what `uv run recsys schema` shows:
 
@@ -218,16 +195,7 @@ path: recommender/recsys/schema.py
 symbol: describe
 ```
 
-It first walks `RAW_TABLES` and prints each table with the grain and one line per column. It then prints the features (the model inputs of chapter 9) grouped by feature group. Having one function that prints the schema keeps documentation honest: when someone adds a column, the report changes automatically.
-
-The same `events` shape also exists in the real database. This is the Postgres definition used by the Rust backend (we will build the full system in chapter 13):
-
-```include
-path: backend/migrations/0001_init.sql
-region: events_table
-```
-
-Notice how the two worlds line up: the same column names, and a `CHECK` constraint that restricts `event_type` to the same six values. The SQL adds `surface` (where on the app the item was shown), which the live app logs and the simulator does not.
+`describe` prints each raw table with its grain, then the features grouped by feature group, so documentation changes whenever the schema does.
 
 ### Configuring the world
 
@@ -249,9 +217,9 @@ path: recommender/recsys/simulate.py
 symbol: _day_weights
 ```
 
-Read it line by line. `days` is a `DatetimeIndex` of 60 consecutive dates. `payday` is a boolean array that is true when the day-of-month is at least 25 or exactly 1. `sale` is true when `d.month == d.day`, the "double date" rule. Then a weight vector of ones is multiplied in place by the three factors using boolean-mask indexing. Finally the function returns three things: the normalised probabilities and the two flags. The flags are returned because the simulator uses them again deeper in the session loop: on a sale day the effective discount is increased by 0.2, and the order probability gets a sale bonus. Time shows up in the *behaviour*, not only in the *volume* of traffic.
+`payday` is true for day-of-month at least 25 or exactly 1; `sale` is true when `d.month == d.day`. Weights are multiplied in by boolean masks, then normalised. The flags are returned because the session loop reuses them: on sale days the effective discount rises by 0.2 and order probability gets a bonus, so time changes behaviour, not only traffic.
 
-We deliberately do not paste the long body of `simulate()` here. Its structure is easy to summarise: build the catalog; build users with latent tastes; for each session choose a day (using these weights), choose a surface (home feed or search) and an intent category; show 12 items; compute the utility for each shown item; sample impression, click, add-to-cart, order, hide and return events with probabilities driven by the utility. If you want to read it, open `recommender/recsys/simulate.py` and search for `utility =`.
+We do not paste the long body of `simulate()`: it builds the catalog and users, then for each session picks a day, surface and intent category, shows 12 items, computes the utility, and samples the events. Search for `utility =` to read it.
 
 ## Run it
 
@@ -270,15 +238,11 @@ file: results/ch01_explore.txt
 
 ## Results: reading the shape of the data
 
-### How big is the world?
+### Size and funnel
 
-The first block lists the table sizes: 25 categories, 150 shops, 2,500 items, 1,500 users, 19,455 sessions, 8,680 searches and 276,378 events. That is a small marketplace by industry standards, but large enough for the effects we care about and small enough to train every model in this book on a laptop in seconds or minutes. The event count is dominated by impressions, as we are about to see.
-
-### The funnel
+The world has 25 categories, 150 shops, 2,500 items, 1,500 users, 19,455 sessions, 8,680 searches and 276,378 events: small by industry standards, big enough for the effects we care about.
 
 Next comes the event funnel. Of 276,378 events, 233,460 are impressions; 24,726 are clicks, which is 10.59% of impressions: the **click-through rate** (CTR). Of those clicks, 42.95% are followed by an add-to-cart (10,619 events). Of those cart additions, 55.17% are followed by an order (5,858 events). Compounding the three rates gives 2.51% of impressions that end in an order. Meanwhile, 1,594 `hide` events (0.68% of impressions) and 121 `return` events (0.05%) are the rare negatives.
-
-![Event funnel from 233,460 impressions down to 5,858 orders; each bar is labelled with its count and its share of impressions.](../assets/charts/ch01-funnel.png)
 
 The funnel is the first reason that "predict a click" is not the same job as "predict a purchase". If we only optimise for clicks we would favour cheap, attention-grabbing items; the ranker in chapter 10 therefore trains on **graded** labels (click 1, cart 2, order 3), so that an order counts more than a click.
 
@@ -290,9 +254,7 @@ The "Events per day" block shows the calendar at work. On ordinary days, the med
 
 ![Daily clicks (bars) and orders (line) over the 60 days; payday windows are shaded and the 8.8 and 9.9 sales are annotated.](../assets/charts/ch01-events-per-day.png)
 
-Look at the shapes in the chart. The payday windows (the 25th through the 1st) lift the bars by a noticeable but moderate amount. The sale days are spikes of almost four times the ordinary level for clicks (1,386 against 347), and orders on those days (405 and 410) are several times anything else in the window. The line of orders is also visibly steadier than the clicks on ordinary days, because a sale day multiplies the order probability as well as the traffic.
-
-There is a modelling lesson in the chart. Suppose you trained on August and evaluated on the last week of September, which sits inside a payday window. A model that learns "popular items are the ones with many clicks per day" will be contaminated by the 8.8 and 9.9 spikes. Chapter 3 will deal with this by **decaying** the importance of old interactions, and chapter 9 by computing windowed features at each *cutoff*.
+The payday windows lift the bars moderately; the sale days are spikes of almost four times the ordinary level for clicks (1,386 against 347).
 
 ### Concentration: the long tail in numbers
 
@@ -302,7 +264,7 @@ The popularity block counts every click, add-to-cart and order per item. The top
 
 The left panel is the classic head-and-tail curve. The right panel, a cumulative share, tells the same story: the further the red curve bows away from the dotted diagonal, the more concentrated the interactions. Half the interaction volume comes from only a tenth of the catalog. This is realistic: marketplaces typically have a small number of items that everyone looks at, and a very large number of items that almost nobody does. It is also *kind to popularity baselines*, which we will exploit and then try to beat.
 
-The 317 items with no interactions at all are the **cold-start** items of chapter 12. No collaborative method can recommend an item that nobody has touched. Only content features, new-item boosts and exploration can.
+The 317 zero-interaction items are the **cold-start** items of chapter 12: only content features, boosts and exploration can surface them.
 
 ### Sparsity
 
@@ -312,38 +274,19 @@ Before the time cutoff, 1,408 users and 2,120 items have at least one interactio
 
 The final block shows how many clicks each user made before the cutoff. The median user clicked 11 items; the quartiles are 5 and 20; the 90th percentile is 31 and the 99th is 56. The mean is 14.2 clicks, the maximum is 106, and 92 users have no clicks at all. Those 92 users are the **cold-start users**. For them, the best we can do is show popular or trending items, or use context such as city or device tier. We will see how the live app does this for anonymous visitors on its home page in chapter 13.
 
-The practical consequences: a few heavy users contribute disproportionately to training data and can dominate a naive model; a small group of users has no history at all; and, for the majority in the middle, only about a dozen clicks must be enough to say something personal. That is not much, which is why the signals in later chapters (category affinity, recency, co-visitation) have to be informative from very little evidence.
-
 ::: fact
 Recommendations are not a side feature at large streaming services. Netflix's engineers reported that their recommender system influences choice for about 80% of the hours streamed on the service, with the remaining 20% coming from search. The number was published in an article on the algorithms and business value of the Netflix recommender system.
 
 Source: Gomez-Uribe et al., ACM Transactions on Management Information Systems, 2015
 :::
 
-## What the data teaches us before we model anything
-
-Let us pull the numbers together and say what each one commits us to.
-
-1. **Implicit feedback, heavily skewed to impressions**: use impressions as denominators for CTR and as "shown but not clicked" negatives; never treat "not clicked" as "disliked".
-2. **A funnel with strong drop-offs**: model several outcomes, or grade the labels.
-3. **A 99.4% sparse matrix**: methods must share statistical strength (neighbours, factors, content features) across users and items.
-4. **A long tail with a heavy head**: popularity is a strong baseline, and any improvement must be measured against it honestly.
-5. **A calendar**: split by time, window the features, and be careful about what a "typical week" is.
-6. **Many cold items and some cold users**: ensure every layer has a fallback.
-
 ## Pitfalls and how it is done in production
 
-**Mistaking the log for the truth.** Your log is a sample from what the system *chose to show*. An item that was never shown has no clicks, which says nothing about whether people would have clicked it. This **selection bias** (also called exposure bias) is invisible in a table of clicks. Production teams log impressions *with* position and surface precisely so that later models can account for what the user actually saw.
-
-**Counting the wrong grain.** If a click on an item appears once in `events` and again in a derived table, a naive join will double-count. Always state the grain of each table in the schema, as `schema.py` does, and check row counts after joins.
+**Mistaking the log for the truth.** The log is a sample of what the system *chose to show*. An item never shown has no clicks, which says nothing about whether people would click it (exposure bias). Production teams log impressions with position and surface so models can account for it.
 
 **Treating all events as equal.** One impression is not one order. The weights 1 / 3 / 5 used in this book are arbitrary but sensible; in production the weights, or the choice of a *primary* objective such as orders or revenue, are a product decision that should be revisited when the business changes.
 
-**Ignoring time zones and "late" data.** The simulator generates naive UTC timestamps, and the database loader in `recsys/db.py` converts all datetimes to naive UTC for the same reason. Mixed time zones produce silent off-by-hours errors, especially around midnight and around paydays.
-
-**Optimising an offline metric until it stops meaning anything.** The hidden truth in a simulator is a luxury. In production you only ever have logs, which is why chapter 2 is about measurement, and chapter 14 about A/B testing.
-
-**How production differs.** A large marketplace logs these same event types, but at a very different volume and with a stricter pipeline: events are published to a stream (a message bus such as Kafka), validated against a schema, de-duplicated, stored in a data warehouse for training, and aggregated into a feature store for serving. Impressions are particularly expensive to log at scale, because a single home page might show dozens of items to hundreds of millions of users. Many platforms therefore sample impressions or log them client-side in batches, as the Vue frontend of our own app does. We will read that code in chapter 13.
+**How production differs.** Large marketplaces log the same event types through a stream (e.g. Kafka), with validation, de-duplication, a warehouse for training and a feature store for serving. Impressions are costly at scale, so many platforms log them client-side in batches, as our Vue frontend does (chapter 13).
 
 ::: tip
 Before building any model, spend an hour with a notebook and the raw tables. Print table sizes, the event funnel, the distribution of events per user and per item, and a time series of events per day. These five checks catch the majority of data bugs, and they set honest expectations for what a model can achieve.
