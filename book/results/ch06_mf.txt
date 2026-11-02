@@ -1,0 +1,65 @@
+
+=== Setup ===
+matrix 1408 users x 2120 items, 18256 observed cells
+factors=32
+
+=== ALS (implicit): factors 32, lambda 0.1, alpha 20, 15 iterations ===
+trained in 1.7s
+iteration  1  loss       225190.5
+iteration  2  loss       147262.9
+iteration  3  loss       131616.4
+iteration  4  loss       124535.6
+iteration  5  loss       120478.2
+iteration  6  loss       117899.3
+iteration  7  loss       116156.7
+iteration  8  loss       114928.5
+iteration  9  loss       114035.7
+iteration 10  loss       113371.0
+iteration 11  loss       112865.4
+iteration 12  loss       112473.0
+iteration 13  loss       112162.2
+iteration 14  loss       111911.5
+iteration 15  loss       111705.9
+
+=== BPR: factors 32, lr 0.05, reg 0.01, 30 epochs, 1 negative per positive ===
+trained in 0.8s
+epoch  1  mean -log sigmoid(gap) 0.6937
+epoch  2  mean -log sigmoid(gap) 0.6864
+epoch  3  mean -log sigmoid(gap) 0.6771
+epoch  4  mean -log sigmoid(gap) 0.6667
+epoch  5  mean -log sigmoid(gap) 0.6530
+epoch  6  mean -log sigmoid(gap) 0.6331
+epoch  7  mean -log sigmoid(gap) 0.6061
+epoch  8  mean -log sigmoid(gap) 0.5707
+epoch  9  mean -log sigmoid(gap) 0.5294
+epoch 10  mean -log sigmoid(gap) 0.4835
+epoch 11  mean -log sigmoid(gap) 0.4398
+epoch 12  mean -log sigmoid(gap) 0.3965
+epoch 13  mean -log sigmoid(gap) 0.3572
+epoch 14  mean -log sigmoid(gap) 0.3215
+epoch 15  mean -log sigmoid(gap) 0.2937
+epoch 16  mean -log sigmoid(gap) 0.2697
+epoch 17  mean -log sigmoid(gap) 0.2473
+epoch 18  mean -log sigmoid(gap) 0.2264
+epoch 19  mean -log sigmoid(gap) 0.2063
+epoch 20  mean -log sigmoid(gap) 0.1918
+epoch 21  mean -log sigmoid(gap) 0.1770
+epoch 22  mean -log sigmoid(gap) 0.1681
+epoch 23  mean -log sigmoid(gap) 0.1555
+epoch 24  mean -log sigmoid(gap) 0.1471
+epoch 25  mean -log sigmoid(gap) 0.1365
+epoch 26  mean -log sigmoid(gap) 0.1320
+epoch 27  mean -log sigmoid(gap) 0.1222
+epoch 28  mean -log sigmoid(gap) 0.1188
+epoch 29  mean -log sigmoid(gap) 0.1132
+epoch 30  mean -log sigmoid(gap) 0.1094
+
+=== Padding with 7-day popularity ===
+als_implicit  users without scores   28  slots padded 3.0%
+bpr           users without scores   28  slots padded 3.0%
+
+=== Results (top-50 lists, evaluated at K=20) ===
+              recall@5  recall@10  recall@20  recall@50  order_recall@20  ndcg@20  coverage@20
+method                                                                                        
+als_implicit    0.1145     0.1816     0.2715     0.3798           0.4122   0.1581       0.5431
+bpr             0.0970     0.1542     0.2218     0.3274           0.3203   0.1379       0.4267
