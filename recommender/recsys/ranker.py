@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import lightgbm as lgb
+import numpy as np
 import pandas as pd
 
 from . import schema
@@ -42,6 +43,23 @@ def train(frame: pd.DataFrame, feature_names: list[str] = schema.FEATURE_NAMES, 
 
 def score(model: lgb.Booster, frame: pd.DataFrame) -> pd.Series:
     return pd.Series(model.predict(frame[model.feature_name()]), index=frame.index, name="score")
+
+
+def contributions(model: lgb.Booster, frame: pd.DataFrame, top: int = 5) -> list[list[tuple[str, float, float]]]:
+    """Per row: the `top` features by |SHAP contribution|, as (feature, value, contribution).
+
+    LightGBM's pred_contrib returns one column per feature plus a final bias column;
+    contributions + bias sum to the raw score.
+    """
+    names = model.feature_name()
+    x = frame[names]
+    contrib = model.predict(x, pred_contrib=True)[:, :-1]
+    values = x.to_numpy(dtype=float)
+    out = []
+    for row_c, row_v in zip(contrib, values):
+        order = np.argsort(-np.abs(row_c))[:top]
+        out.append([(names[j], float(row_v[j]), float(row_c[j])) for j in order])
+    return out
 
 
 def importance(model: lgb.Booster) -> pd.Series:

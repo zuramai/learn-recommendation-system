@@ -2,13 +2,15 @@
 
 Time-based split (never random — random splits let the model peek at the future):
 
-  day 0 ........................ 46 ....... 53 ....... 60
+  start ..................... end-14d ... end-7d .... end
   |---- history for TRAIN rows ---|- labels -|
   |------------- history for EVAL rows -----|- labels -|
   |------------------- history for SERVING (recommend) ---|-> now
 
-The model is trained on "what did users do in days 46-53 given everything up
-to 46" and evaluated on "days 53-60 given everything up to 53".
+The model is trained on "what did users do in [end-14d, end-7d) given everything
+before end-14d" and evaluated on "[end-7d, end) given everything before end-7d".
+`end` is the end of the dataset: the CSV lab's last simulated day, or "now" for
+the live database.
 """
 
 from __future__ import annotations
@@ -17,10 +19,23 @@ import pandas as pd
 
 from . import candidates, data, evaluate, features, ranker, rerank, schema
 
-TRAIN_CUTOFF_DAY = 46
-EVAL_CUTOFF_DAY = 53
 LABEL_DAYS = 7
 K = 20
+
+# Why an item was retrieved, in plain words (shown in the CLI and the web app's "Why this?").
+SOURCES = {
+    "recent": "you viewed it",
+    "covisit": "viewed together with your items",
+    "category_popular": "popular in a category you like",
+    "trending": "trending now",
+    "same_category": "popular in the same category",
+}
+_SOURCE_COLS = {"cand_recent_score": "recent", "cand_covisit_score": "covisit", "cand_catpop_score": "category_popular"}
+
+
+def metric_key(method: str, metric: str) -> str:
+    """'lightgbm + rerank', 'ndcg@20' -> 'lightgbm_rerank/ndcg@20' (the gRPC ModelInfo metric keys)."""
+    return f"{method.lower().replace(' + ', '_').replace(' ', '_')}/{metric}"
 
 
 def build_frame(tables: dict[str, pd.DataFrame], cutoff: pd.Timestamp) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -45,9 +60,11 @@ def heuristic_score(frame: pd.DataFrame) -> pd.Series:
     return s
 
 
-def train_and_evaluate(tables: dict[str, pd.DataFrame], meta: data.Meta, ablation: bool = False):
-    train_frame, _ = build_frame(tables, meta.day(TRAIN_CUTOFF_DAY))
-    eval_frame, eval_labels = build_frame(tables, meta.day(EVAL_CUTOFF_DAY))
+def train_and_evaluate(tables: dict[str, pd.DataFrame], end: pd.Timestamp, ablation: bool = False):
+    train_cutoff = end - pd.Timedelta(days=2 * LABEL_DAYS)
+    eval_cutoff = end - pd.Timedelta(days=LABEL_DAYS)
+    train_frame, _ = build_frame(tables, train_cutoff)
+    eval_frame, eval_labels = build_frame(tables, eval_cutoff)
     model = ranker.train(train_frame)
 
     eval_scored = eval_frame.assign(score=ranker.score(model, eval_frame))
@@ -91,10 +108,43 @@ def group_ablation(train_frame, eval_frame, eval_labels, full: pd.Series) -> pd.
     return out
 
 
-def recommend(tables: dict[str, pd.DataFrame], meta: data.Meta, model, user_id: int, k: int = 10) -> pd.DataFrame:
-    """Serve: cutoff = end of data ("now"), score this user's candidates, apply business rules."""
-    hist = data.History.at(tables, meta.day(meta.n_days))
+def recommend(
+    tables: dict[str, pd.DataFrame], now: pd.Timestamp, model, user_id: int, k: int = 10
+) -> tuple[pd.DataFrame, int]:
+    """Serve: cutoff = `now`, score this user's candidates, apply business rules.
+
+    Returns (top-k rows after re-ranking, number of candidate rows scored).
+    """
+    hist = data.History.at(tables, now)
     cands = candidates.generate(hist, [user_id])
     frame = features.build(cands, hist)
     scored = frame.assign(score=ranker.score(model, frame))
-    return rerank.rerank(scored, k)
+    return rerank.rerank(scored, k), len(frame)
+
+
+def source_of(frame: pd.DataFrame) -> pd.Series:
+    """Per row: the retriever with the largest score, or 'trending' when only global popularity found it."""
+    scores = frame[list(_SOURCE_COLS)]
+    best = scores.idxmax(axis=1).map(_SOURCE_COLS)
+    return best.where(scores.max(axis=1) > 0, "trending")
+
+
+def similar_items(tables: dict[str, pd.DataFrame], now: pd.Timestamp, item_id: int, k: int) -> pd.DataFrame:
+    """Product page "similar items": co-visited items first, then popular items of the same category."""
+    hist = data.History.at(tables, now)
+    empty = pd.DataFrame({"item_id": pd.Series(dtype="int64"), "score": pd.Series(dtype="float64"), "source": pd.Series(dtype="object")})
+    if item_id not in set(hist.items["item_id"]):
+        return empty
+    in_stock = hist.items.loc[hist.items["in_stock"], ["item_id", "category_id"]]
+    m = candidates.covisitation_matrix(hist)
+    co = m[(m["item_id_a"] == item_id) & (m["item_id_b"] != item_id) & m["item_id_b"].isin(in_stock["item_id"])]
+    co = co.sort_values("w", ascending=False).head(k)
+    out = pd.DataFrame({"item_id": co["item_id_b"].to_numpy(), "score": co["w"].to_numpy(), "source": "covisit"})
+
+    category = hist.items.loc[hist.items["item_id"] == item_id, "category_id"].iloc[0]
+    pop = candidates.item_popularity(hist, 7)
+    same = in_stock[(in_stock["category_id"] == category) & (in_stock["item_id"] != item_id) & ~in_stock["item_id"].isin(out["item_id"])]
+    same = same.assign(score=same["item_id"].map(pop).fillna(0.0)).sort_values("score", ascending=False, kind="stable")
+    fill = pd.DataFrame({"item_id": same["item_id"].to_numpy(), "score": same["score"].to_numpy(), "source": "same_category"})
+    out = pd.concat([out, fill.head(k - len(out))], ignore_index=True) if len(out) < k else out
+    return out.astype({"item_id": "int64", "score": "float64"}).reset_index(drop=True) if len(out) else empty

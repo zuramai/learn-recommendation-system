@@ -34,6 +34,10 @@ class Meta:
     def day(self, d: int) -> pd.Timestamp:
         return self.start + pd.Timedelta(days=d)
 
+    @property
+    def end(self) -> pd.Timestamp:
+        return self.start + pd.Timedelta(days=self.n_days)
+
 
 def save(tables: dict[str, pd.DataFrame], cfg: SimConfig, out: Path) -> None:
     out.mkdir(parents=True, exist_ok=True)

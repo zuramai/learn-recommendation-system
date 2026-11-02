@@ -12,11 +12,6 @@ from . import data, pipeline, ranker, schema, simulate
 
 DATA_DIR = Path("data")
 MODEL_PATH = Path("artifacts/ranker.txt")
-SOURCE_LABEL = {
-    "cand_recent_score": "you viewed it",
-    "cand_covisit_score": "viewed together with your items",
-    "cand_catpop_score": "popular in a category you like",
-}
 
 
 def cmd_schema(_: argparse.Namespace) -> None:
@@ -38,7 +33,7 @@ def cmd_simulate(args: argparse.Namespace) -> None:
 def cmd_train(args: argparse.Namespace) -> None:
     tables, meta = data.load(DATA_DIR)
     t = time.time()
-    model, rep = pipeline.train_and_evaluate(tables, meta, ablation=args.ablation)
+    model, rep = pipeline.train_and_evaluate(tables, meta.end, ablation=args.ablation)
     ranker.save(model, MODEL_PATH)
     pd.set_option("display.width", 120)
     print(f"Trained in {time.time() - t:.1f}s; model -> {MODEL_PATH}")
@@ -68,12 +63,12 @@ def cmd_recommend(args: argparse.Namespace) -> None:
     q = se.loc[se["user_id"] == args.user, "query"].tail(5).tolist()
     print(f"Recent searches: {q}\n")
 
-    recs = pipeline.recommend(tables, meta, model, args.user, args.k)
+    recs, _ = pipeline.recommend(tables, meta.end, model, args.user, args.k)
+    recs = recs.assign(source=pipeline.source_of(recs))
     print(f"Top {args.k} recommendations:")
     for i, r in enumerate(recs.itertuples(), 1):
         it = items.loc[r.item_id]
-        why = max(SOURCE_LABEL, key=lambda c: getattr(r, c))
-        why = SOURCE_LABEL[why] if getattr(r, why) > 0 else "trending now"
+        why = pipeline.SOURCES[r.source]
         print(f"  {i:>2}. {it['title']:<36} {it['name']:<18} Rp{it['price']:>10,.0f}  score {r.score:6.2f}  ({why})")
 
 
