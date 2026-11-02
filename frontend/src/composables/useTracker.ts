@@ -46,7 +46,17 @@ export function track(e: TrackEvent) {
   else if (timer === null) timer = window.setTimeout(() => void flush(), FLUSH_MS)
 }
 
+// Views that still need to record something when the tab closes (e.g. Product.vue's
+// click + dwell) register here, so their events are queued before the beacon is sent.
+const pageHideHooks = new Set<() => void>()
+
+export function onPageHide(fn: () => void): () => void {
+  pageHideHooks.add(fn)
+  return () => pageHideHooks.delete(fn)
+}
+
 window.addEventListener('pagehide', () => {
+  for (const fn of pageHideHooks) fn()
   const events = take()
   if (!events.length) return
   navigator.sendBeacon('/api/events', new Blob([JSON.stringify({ events })], { type: 'application/json' }))

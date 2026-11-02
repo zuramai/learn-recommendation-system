@@ -4,7 +4,7 @@ import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vu
 import { api, formatIDR, type ProductDetail, type RecsResponse } from '../api'
 import ProductGrid from '../components/ProductGrid.vue'
 import ProductImage from '../components/ProductImage.vue'
-import { track } from '../composables/useTracker'
+import { onPageHide, track } from '../composables/useTracker'
 import { useAuth } from '../stores/auth'
 import { useCart } from '../stores/cart'
 
@@ -48,9 +48,9 @@ onBeforeRouteLeave(endView)
 onBeforeRouteUpdate((to, from) => {
   if (to.params.id !== from.params.id) endView()
 })
-window.addEventListener('pagehide', endView)
+const stopPageHide = onPageHide(endView) // tab closed / full reload: queued before the beacon flush
 onUnmounted(() => {
-  window.removeEventListener('pagehide', endView)
+  stopPageHide()
   endView()
 })
 // book:end dwell
