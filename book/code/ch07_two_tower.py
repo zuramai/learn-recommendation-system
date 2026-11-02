@@ -108,59 +108,107 @@ def main() -> None:
     print(f"training pairs (distinct user-item positives before cutoff): {len(pairs)}")
     print(f"user history window: last {N_HIST} items; temperature {TEMP}; batch {BATCH}; epochs {EPOCHS}")
 
-    model = Towers(len(all_users), len(items), n_cats, len(brands), 5)
-    opt = torch.optim.Adam(model.parameters(), lr=1e-3)
-    g = torch.Generator().manual_seed(0)
-
-    common.section("Training (in-batch softmax)")
-    losses = []
-    for ep in range(1, EPOCHS + 1):
-        model.train()
-        perm = torch.randperm(len(p_u), generator=g)
-        total, nb = 0.0, 0
-        for s in range(0, len(perm), BATCH):
-            b = perm[s : s + BATCH]
-            u, i = p_u[b], p_i[b]
-            h = t_hist[u].clone()
-            h[h == i[:, None]] = model.pad  # hide the target item from its own history (no leakage)
-            uv = model.user_vec(u, h, t_aff[u])
-            iv = model.item_vec(i, t_cat[i], t_brand[i], t_bucket[i])
-            logits = uv @ iv.T / TEMP
-            same = i[:, None] == i[None, :]
-            logits = logits.masked_fill(same & ~torch.eye(len(b), dtype=torch.bool), -1e9)  # duplicate items are not negatives
-            loss = F.cross_entropy(logits, torch.arange(len(b)))
-            opt.zero_grad()
-            loss.backward()
-            opt.step()
-            total += loss.item()
-            nb += 1
-        losses.append(total / nb)
-        print(f"epoch {ep:>2d}  in-batch softmax loss {losses[-1]:.4f}")
-
-    # ---- embeddings
-    model.eval()
-    with torch.no_grad():
-        iv_all = model.item_vec(t_item, t_cat, t_brand, t_bucket).numpy()
-        u_rows = user_pos.get_indexer(users)
-        uv_eval = model.user_vec(torch.tensor(u_rows), t_hist[u_rows], t_aff[u_rows]).numpy()
-
+    # ---- diagnostics: rule out plumbing bugs before blaming the model
+    common.section("Diagnostics (is the weak score a bug?)")
+    assert (item_pos.get_indexer(item_ids) == np.arange(len(items))).all()
+    assert (user_pos.get_indexer(all_users) == np.arange(len(all_users))).all()
+    assert (items.set_index("item_id").loc[item_ids, "category_id"].to_numpy() == cats["category_id"].to_numpy()[t_cat.numpy()]).all()
+    ok_hist = hist_mat[hist_mat < len(items)]
+    print("index mapping user/item/category/brand consistent between training and scoring: OK")
+    print(f"latest event time used for history: {pos['ts'].max()}  (cutoff {common.CUTOFF}) -> strictly before: {bool(pos['ts'].max() < common.CUTOFF)}")
+    assert pos["ts"].max() < common.CUTOFF
+    aff_nz = (t_aff.sum(1) > 0).numpy()
+    eval_rows = user_pos.get_indexer(users)
+    print(f"eval users with non-zero category-affinity vector: {aff_nz[eval_rows].mean():.1%}")
     avail_mask = items["in_stock"].to_numpy()
     avail_ids = item_ids[avail_mask]
-    V = iv_all[avail_mask].astype(np.float32)
+    print(f"items scored: {avail_mask.sum()} in-stock of {len(items)} listed (out-of-stock items excluded at scoring)")
     has_hist = np.isin(users, last.index.to_numpy())
-    scores = uv_eval @ V.T
-    scores[~has_hist] = 0.0  # untrained user-id embedding: no opinion -> popularity padding
-    # cosine scores can be negative; shift so "has an opinion" == positive
-    scores = np.where(has_hist[:, None], scores - scores.min(axis=1, keepdims=True) + 1e-6, 0.0)
+    diag = {"eval_users_with_affinity": float(aff_nz[eval_rows].mean()), "history_before_cutoff": True}
 
-    recs, st = dense_recs.scores_to_recs(scores, users, avail_ids)
-    res = common.evaluate(recs, "two_tower")
+    def train(epochs: int, logq: bool, tag: str):
+        torch.manual_seed(0)
+        model = Towers(len(all_users), len(items), n_cats, len(brands), 5)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        g = torch.Generator().manual_seed(0)
+        counts = torch.bincount(p_i, minlength=len(items)).float()
+        log_q = torch.log(counts.clamp(min=1.0) / len(p_i))  # item sampling probability in a batch
+        losses = []
+        for ep in range(1, epochs + 1):
+            model.train()
+            perm = torch.randperm(len(p_u), generator=g)
+            total, nb = 0.0, 0
+            for s0 in range(0, len(perm), BATCH):
+                b = perm[s0 : s0 + BATCH]
+                u, i = p_u[b], p_i[b]
+                h = t_hist[u].clone()
+                h[h == i[:, None]] = model.pad  # hide the target item from its own history (no leakage)
+                uv = model.user_vec(u, h, t_aff[u])
+                iv = model.item_vec(i, t_cat[i], t_brand[i], t_bucket[i])
+                logits = uv @ iv.T / TEMP
+                if logq:
+                    logits = logits - log_q[i][None, :]  # logQ correction (Yi et al., RecSys 2019)
+                same = i[:, None] == i[None, :]
+                logits = logits.masked_fill(same & ~torch.eye(len(b), dtype=torch.bool), -1e9)  # duplicates are not negatives
+                loss = F.cross_entropy(logits, torch.arange(len(b)))
+                opt.zero_grad()
+                loss.backward()
+                opt.step()
+                total += loss.item()
+                nb += 1
+            losses.append(total / nb)
+            if ep in (1, 5, 10, 20, 30) or ep == epochs:
+                print(f"[{tag}] epoch {ep:>2d}  loss {losses[-1]:.4f}")
+        model.eval()
+        with torch.no_grad():
+            iv_all = model.item_vec(t_item, t_cat, t_brand, t_bucket).numpy()
+            uv_eval = model.user_vec(torch.tensor(eval_rows), t_hist[eval_rows], t_aff[eval_rows]).numpy()
+        return model, iv_all, uv_eval, losses
+
+    def evaluate_variant(name, iv_all, uv_eval):
+        V = iv_all[avail_mask].astype(np.float32)
+        sc = uv_eval @ V.T
+        sc = np.where(has_hist[:, None], sc - sc.min(axis=1, keepdims=True) + 1e-6, 0.0)
+        recs, st = dense_recs.scores_to_recs(sc, users, avail_ids)
+        assert recs["item_id"].isin(avail_ids).all()
+        return common.evaluate(recs, name), st, V
+
+    variants = {"two_tower": (10, False), "two_tower_logq": (10, True),
+                "two_tower_30ep": (30, False), "two_tower_logq_30ep": (30, True)}
+    results, stats, losses_all, vecs = [], {}, {}, {}
+    for name, (ep, lq) in variants.items():
+        common.section(f"Training {name}: {ep} epochs, logQ correction {'on' if lq else 'off'}")
+        model, iv_all, uv_eval, losses = train(ep, lq, name)
+        res, st, V = evaluate_variant(name, iv_all, uv_eval)
+        results.append(res)
+        stats[name] = st
+        losses_all[name] = losses
+        vecs[name] = (V, uv_eval)
+        if name == "two_tower":  # sanity: does the spec model fit its own training data?
+            with torch.no_grad():
+                tu = p_u[:2000]
+                tv = model.user_vec(tu, torch.where(t_hist[tu] == p_i[:2000, None], model.pad, t_hist[tu]), t_aff[tu])
+                allv = model.item_vec(t_item, t_cat, t_brand, t_bucket)
+                rank = ((tv @ allv.T) > (tv * allv[p_i[:2000]]).sum(1, keepdim=True)).sum(1)
+                tr = float((rank < 20).float().mean())
+            print(f"sanity: true training item is in the user's top-20 of {len(items)} items for {tr:.1%} of training pairs")
+            diag["spec_model_train_recall@20"] = tr
+
     common.section("Evaluation: brute-force top 50 over in-stock items")
-    print(f"users without history (padded with 7-day popularity): {st['users_without_model_scores']} of {st['users']}")
-    common.print_table([res])
+    print(f"users without history (padded with 7-day popularity): {stats['two_tower']['users_without_model_scores']} of {stats['two_tower']['users']}")
+    ref = common.evaluate(dense_recs.scores_to_recs(np.tile(dense_recs.pop7_vector(avail_ids) + 1e-9, (len(users), 1)), users, avail_ids)[0], "pop_7d")
+    results.append(ref)
+    common.print_table(results)
+    best = max(results[:4], key=lambda r: r["ndcg@20"])["method"]
+    ann_name = "two_tower"
+    print(f"best two-tower variant: {best}; the ANN demo below uses the spec model '{ann_name}'")
+    V, uv_eval = vecs[ann_name]
+    res = results[0]
+    losses = losses_all["two_tower"]
+    st = stats["two_tower"]
 
     # ---- ANN (IVF) demo
-    common.section("Approximate nearest neighbours: IVF with 32 k-means clusters")
+    common.section(f"Approximate nearest neighbours: IVF with 32 k-means clusters (on {ann_name})")
     cent, assign = kmeans(V, 32, 20)
     sizes = np.bincount(assign, minlength=32)
     print(f"cluster sizes: min {sizes.min()}  median {int(np.median(sizes))}  max {sizes.max()}")
@@ -200,9 +248,13 @@ def main() -> None:
     print(f"\nPCA: first two components explain {var[:2].sum():.1%} of item-vector variance")
 
     common.save_results("ch07_two_tower", {
-        "results": [res],
-        "padding": st,
+        "results": results,
+        "best_variant": best,
+        "ann_variant": ann_name,
+        "diagnostics": diag,
+        "padding": stats,
         "loss": losses,
+        "loss_by_variant": losses_all,
         "ann": ann,
         "brute_force_ms_per_query": brute_ms,
         "n_items_indexed": int(len(V)),
