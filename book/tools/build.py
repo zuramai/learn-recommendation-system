@@ -226,7 +226,7 @@ def load_chapters(src: Path, lang: str, md: MarkdownIt | None = None) -> list[Ch
     chapters = []
     for p in sorted(src.glob("[0-9][0-9]-*.md")):
         ch = classify(p, L)
-        ch.tokens = md.parse(p.read_text())
+        ch.tokens = md.parse(break_option_lines(p.read_text()))
         h1s = [i for i, t in enumerate(ch.tokens) if t.type == "heading_open" and t.tag == "h1"]
         if len(h1s) != 1:
             ch.errors.append(f"expected exactly one `# ` title, found {len(h1s)}")
@@ -238,6 +238,24 @@ def load_chapters(src: Path, lang: str, md: MarkdownIt | None = None) -> list[Ch
 
 def slugify_fig(n: int) -> str:
     return str(n)
+
+
+OPTION_LINE = re.compile(r"^[A-D][.)]\s")
+
+
+def break_option_lines(text: str) -> str:
+    """Multiple-choice options written on consecutive lines would be joined into one paragraph;
+    end the line before each `A. `/`B) `… option with a hard break so every option gets its own line."""
+    lines = text.split("\n")
+    in_fence = False
+    for i, line in enumerate(lines):
+        if line.startswith("```"):
+            in_fence = not in_fence
+        nxt = lines[i + 1] if i + 1 < len(lines) else ""
+        if (not in_fence and line.strip() and OPTION_LINE.match(nxt)
+                and not line.endswith(("\\", "  "))):
+            lines[i] = line + "\\"
+    return "\n".join(lines)
 
 
 def render_chapter(ch: Chapter, md: MarkdownIt, L: dict[str, str], toc: list) -> str:
@@ -381,7 +399,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   window.__bookErrors = [];
   try {
     mermaid.initialize({startOnLoad: false, theme: 'neutral', securityLevel: 'loose',
-                        flowchart: {useMaxWidth: true, htmlLabels: true}});
+                        flowchart: {useMaxWidth: true, htmlLabels: true},
+                        // Wrap long messages so sequence diagrams stay narrow enough to print legibly.
+                        sequence: {useMaxWidth: true, wrap: true, width: 190, actorMargin: 30,
+                                   messageFontSize: 15, actorFontSize: 15, noteFontSize: 14}});
     const nodes = Array.from(document.querySelectorAll('pre.mermaid'));
     for (const n of nodes) {
       try { await mermaid.run({nodes: [n], suppressErrors: false}); }
