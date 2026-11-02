@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+data/
+artifacts/
+.pytest_cache/
+target/
+node_modules/
+dist/
+.env
+book/build/
+book/node_modules/
+!book/dist/
