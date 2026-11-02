@@ -1,0 +1,51 @@
+{
+  "repeats": 7,
+  "rows": [
+    {
+      "user": "light",
+      "user_id": 828,
+      "interactions": 4,
+      "candidates": 110,
+      "history_at_ms": 12.405875138938427,
+      "generate_ms": 254.01116674765944,
+      "covisit_matrix_ms": 26.434333063662052,
+      "features_build_ms": 515.622875187546,
+      "item_features_ms": 139.11379221826792,
+      "score_ms": 2.06791702657938,
+      "rerank_ms": 2.403708640486002,
+      "shap_ms": 6.5887500531971455,
+      "total_ms": 793.1002927944064
+    },
+    {
+      "user": "median",
+      "user_id": 680,
+      "interactions": 22,
+      "candidates": 112,
+      "history_at_ms": 14.005957636982203,
+      "generate_ms": 234.38583314418793,
+      "covisit_matrix_ms": 32.84991579130292,
+      "features_build_ms": 491.6570829227567,
+      "item_features_ms": 212.65712520107627,
+      "score_ms": 3.71812516823411,
+      "rerank_ms": 4.339499864727259,
+      "shap_ms": 8.96004168316722,
+      "total_ms": 757.0665404200554
+    },
+    {
+      "user": "heavy",
+      "user_id": 349,
+      "interactions": 133,
+      "candidates": 95,
+      "history_at_ms": 14.860375318676233,
+      "generate_ms": 233.9064171537757,
+      "covisit_matrix_ms": 38.99675002321601,
+      "features_build_ms": 544.4910828955472,
+      "item_features_ms": 135.49162494018674,
+      "score_ms": 1.4651669189333916,
+      "rerank_ms": 2.5146659463644028,
+      "shap_ms": 7.229875307530165,
+      "total_ms": 804.467583540827
+    }
+  ],
+  "generate_plus_features_share": 0.9656755472920441
+}

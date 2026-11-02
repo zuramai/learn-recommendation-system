@@ -37,7 +37,7 @@ code, pre, .highlight pre { font-family: "SF Mono", "Menlo", "Consolas", "DejaVu
 code { font-size: 9pt; background: #f3f4f6; padding: 0 0.2em; border-radius: 2px; }
 pre code { background: none; padding: 0; }
 .highlight { background: #f8f8f4; border: 1px solid #e5e7eb; border-radius: 3px; margin: 0 0 0.9em; }
-.highlight pre { margin: 0; padding: 2.5mm 3mm; font-size: 8.5pt; line-height: 1.35;
+.highlight pre { margin: 0; padding: 2.5mm 3mm; font-size: 8pt; line-height: 1.3;
                  white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }
 .code-block { margin: 0 0 0.9em; }
 .code-block .highlight { margin: 0; border-top-left-radius: 0; border-top-right-radius: 0; }
@@ -59,11 +59,11 @@ th { background: #f3f4f6; }
 
 /* figures */
 figure { margin: 1em 0; text-align: center; break-inside: avoid; }
-img { max-width: 100%; max-height: 220mm; }
+img { max-width: 100%; max-height: 120mm; }
 figcaption { font-size: 9pt; color: #444; margin-top: 2mm; text-align: center; font-style: italic; }
 figcaption .fig-no { font-weight: bold; font-style: normal; }
 pre.mermaid { background: none; border: 0; font-family: inherit; white-space: normal; text-align: center; margin: 0; }
-pre.mermaid svg { max-width: 100%; height: auto; }
+pre.mermaid svg { max-width: 100%; max-height: 150mm; height: auto; }
 figure.diagram { overflow: hidden; }
 
 /* callouts */

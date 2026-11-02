@@ -1,0 +1,14 @@
+
+=== Stage timings for one request (median of 7 runs, milliseconds) ===
+catalogue: 2,500 items, 276,378 events, cutoff = END
+user    inter.  cands  History.at  generate  features   score  rerank   shap   total
+light        4    110          12       254       516       2       2      7     793
+median      22    112          14       234       492       4       4      9     757
+heavy      133     95          15       234       544       1       3      7     804
+
+=== Inside generate / features: item-level work that does not depend on the user ===
+covisitation_matrix (inside generate):  26 ms
+item_features      (inside features):  139 ms
+
+generate + features.build = 97% of the request on average;
+both recompute catalogue-wide statistics on every call, whatever the user.
