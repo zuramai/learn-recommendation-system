@@ -6,6 +6,8 @@ What Dewi wants is a *representation*: a short list of numbers for every user an
 
 In this chapter we build one from scratch in PyTorch on the same simulated marketplace as every other chapter, train it, and evaluate it against the popularity baseline. The result is not what the textbooks make you expect: the model that follows the recipe faithfully scores *below* the trivial "popular in the last 7 days" baseline. Finding out why, and fixing it with a one-line correction from a real production paper, is the most instructive part of the chapter. We finish by building an approximate nearest-neighbour index (IVF) with nothing but numpy, so you see why retrieval over a huge catalogue does not need to touch every item.
 
+Two words we use throughout. A **retriever** is the fast first stage: it looks at the whole catalogue and picks a few hundred *candidates* that might suit the user. A **ranker** is the careful second stage: it scores only those candidates, using more information, and puts them in the final order. Think of a shop assistant who first pulls twenty books off the shelves, and then you decide which three to buy. This chapter is about building a better retriever.
+
 **What you'll learn**
 
 - What an embedding is, and why "closeness in a vector space" is a useful replacement for hand-written similarity rules.
@@ -15,6 +17,43 @@ In this chapter we build one from scratch in PyTorch on the same simulated marke
 - How approximate nearest-neighbour search (IVF from scratch; HNSW, ScaNN and FAISS in the real world) trades recall for speed.
 - How to read a PCA picture of embeddings without over-interpreting it.
 
+## Building blocks you need first
+
+The two-tower model uses a handful of ideas from machine learning. We introduce each one here with a tiny example, so the rest of the chapter reads smoothly. If you already know them, skip to the next section.
+
+### A vector is a list of numbers
+
+A **vector** is an ordered list of numbers, like `[0.6, 0.8]`. How many numbers it holds is its **dimension**. Two numbers can be drawn as a point on a flat map. Thirty-two numbers cannot be drawn, but the idea is the same: a point in a space, and points that are close together are similar. Our model gives every user and every item such a list. We call that list an **embedding** (more on that in a moment).
+
+### The dot product measures agreement
+
+The **dot product** of two vectors is: multiply the numbers in matching positions, then add the results. Suppose shopper Sari's vector is $(0.6, 0.8)$. Compare her with three items:
+
+| Item vector | Calculation | Dot product |
+|---|---|---|
+| Running shoes $(0.6, 0.8)$ | $0.6 \times 0.6 + 0.8 \times 0.8$ | $1.0$ |
+| Phone case $(0.8, -0.6)$ | $0.6 \times 0.8 + 0.8 \times (-0.6)$ | $0.0$ |
+| Opposite taste $(-0.6, -0.8)$ | $0.6 \times (-0.6) + 0.8 \times (-0.8)$ | $-1.0$ |
+
+If you draw each vector as an arrow from the origin, the dot product is large when the arrows point the same way, zero when they are at right angles, and negative when they point opposite ways. So one cheap multiplication-and-addition gives a "how well does this item fit this user?" score. That is the whole reason embeddings are useful for recommendation.
+
+### Unit length and cosine similarity
+
+The **length** (also called **norm**) of a vector is the square root of the sum of its squares. For $(3, 4)$ it is $\sqrt{9 + 16} = 5$. To **L2-normalise** a vector means to divide every number by its length, so the new length is exactly 1: $(3, 4)$ becomes $(0.6, 0.8)$. ("L2" is just the name of this ordinary length.) For two normalised vectors the dot product is called the **cosine similarity**: $1$ means the same direction, $0$ unrelated, $-1$ opposite, exactly as in the table above. Without normalising, an item could win a high score simply by having a long vector, whatever its direction.
+
+### A neural network is adjustable arithmetic
+
+A **neural network** is a function built by stacking simple steps, with many adjustable numbers called **parameters** (or *weights*). You need only these pieces:
+
+- A **linear layer** computes weighted sums. For example, one output could be $0.9 \times (\text{shoe views}) + 0.7 \times (\text{watch views}) - 0.2 \times (\text{phone-case views})$. The $0.9$, $0.7$ and $-0.2$ are parameters. A layer "64 wide" computes 64 such sums at once.
+- **ReLU** is a one-line rule: keep positive numbers, turn negative numbers into 0 ($\text{ReLU}(3) = 3$, $\text{ReLU}(-2) = 0$). Without it, stacking linear layers would collapse into a single linear layer; ReLU lets the network learn curved, more flexible patterns.
+- An **MLP** (multi-layer perceptron) is the simple stack *linear layer → ReLU → linear layer*. When the diagram says "MLP 64 → 32", the middle layer is 64 numbers wide and the output is 32 numbers.
+- An **embedding table** is a spreadsheet with one row per id (one row per user, per brand, and so on). "Looking up the embedding" of brand 7 means reading row 7. The rows start as random numbers and are parameters, so training adjusts them.
+
+**Training** means finding good parameters. We start with random ones, and the network makes a prediction on some examples. A **loss** is a single number saying how wrong the predictions were (lower is better). The **gradient** tells us, for every parameter, which small nudge would reduce the loss. An **optimiser** (we use one called Adam) applies those nudges, and the **learning rate** is the size of each nudge. It is like a hiker in fog who cannot see the valley but can feel the slope under their feet and keeps stepping downhill. Examples go through in small groups called **batches**, and one full pass over all the training data is an **epoch**.
+
+A final word on **hyperparameters**: these are settings *we* choose before training (the embedding size, the learning rate, the temperature we meet below), as opposed to parameters, which training learns.
+
 ## Intuition: from names to coordinates
 
 Think about how a good bookshop assistant works. She does not memorise a table of "customers who bought X also bought Y". She has a *map in her head*: cookbooks on one side of the shop, thrillers on the other, with "food memoirs" somewhere between. A new customer walks in, says two sentences about what she likes, and the assistant places her on the map. Recommending is then just "walk to the nearest shelf that hasn't been picked over".
@@ -23,9 +62,9 @@ An **embedding** is that map made explicit. Every user and every item becomes a 
 
 Three things.
 
-1. **The vectors are computed by a function, not looked up in a table.** In matrix factorisation each item has a free parameter vector. An item with no interactions gets no vector. In a two-tower model, the item vector is the *output of a small neural network* whose inputs include side information: category, brand, price bucket. A new item with a known category and brand gets a sensible vector on its first day. The same goes for users: the user tower can read the last items a user touched and their category affinities, so the vector reacts to what she did five minutes ago, as long as the history features are fresh when you compute them.
-2. **The loss is a ranking-flavoured softmax, not a squared error.** We will not predict a rating. We will ask: among all items in this batch, which one did the user actually interact with? That is a classification problem, and it scales.
-3. **Serving is a nearest-neighbour lookup.** Because the final score is a dot product between a user vector and an item vector, and the item vectors do not depend on the user, we can compute every item vector once, put them in an index, and answer "top 50 items for this user" without a neural network forward pass per item.
+1. **The vectors are computed by a function, not looked up in a table.** In matrix factorisation each item has its own freely adjustable row of numbers. An item with no interactions never has its row trained, so it gets no useful vector. In a two-tower model, the item vector is the *output of a small neural network*. Its inputs include **side information**, extra facts about the item such as category, brand and price bucket (which fifth of the category's prices it falls in). A new item with a known category and brand gets a sensible vector on its first day. The same goes for users: the user tower can read the last items a user touched and their category affinities, so the vector reacts to what she did five minutes ago, as long as the history features are fresh when you compute them.
+2. **The loss is a ranking-flavoured softmax, not a squared error.** Matrix factorisation in Chapter 6 minimised *squared error*: the gap between a predicted number and the true number, squared. Here we do not predict a rating. We ask a multiple-choice question: among the items in this batch, which one did the user actually interact with? That is a classification problem (pick one answer out of many), and it scales to large data.
+3. **Serving is a nearest-neighbour lookup.** *Serving* means answering live requests after training is done. The final score is a dot product between a user vector and an item vector, and the item vectors do not depend on the user. So we can compute every item vector once, put them in an index, and answer "top 50 items for this user" without running the neural network once per item (a *forward pass* is one run of an input through the network).
 
 ::: fact
 **Vectors that do arithmetic.** The 2013 Google paper on efficient word-vector training recalls an earlier finding: with simple algebra on word vectors, vector("King") − vector("Man") + vector("Woman") gives a vector closest to the vector for "Queen". Nobody programmed that regularity into the vectors. Recommender embeddings follow the same idea with items and users in place of words.
@@ -68,9 +107,11 @@ flowchart LR
 
 *Figure: The two towers of our model. The only place the user side and the item side meet is the final dot product.*
 
+Two small operations appear in the diagram. **Concat** (concatenate) glues vectors end to end: $[0.2, 0.8]$ and $[0.5]$ become $[0.2, 0.8, 0.5]$; that is why $32 + 32 + 25 = 89$. The **mean of the last 20 item embeddings** averages position by position: the mean of $(0.2, 0.8)$ and $(0.6, 0.4)$ is $(0.4, 0.6)$. It summarises the user's recent history as one vector. The **category-affinity vector** has one number per category (25 here), saying what share of the user's recent interest went to that category.
+
 The **user tower** concatenates a learned user-id embedding (32 numbers), the *mean* of the embeddings of the last 20 items the user interacted with (32, from the same item-id table the item tower uses), and the 25-dimensional category-affinity vector from `recsys.candidates.category_affinity`; a two-layer MLP maps these 89 numbers to 32. The **item tower** concatenates the item-id embedding (32), category (8), brand (8) and price-bucket (8, the quintile of price relative to the category median) embeddings; another MLP maps these 56 numbers to 32.
 
-Both outputs are **L2-normalised**, so the dot product of a user vector and an item vector is exactly their *cosine similarity*, between $-1$ and $1$. This stops the model inflating the norm of popular items and bounds the score, which is what lets us talk about a temperature next.
+Both outputs are **L2-normalised** (scaled to length 1, as in the building blocks above), so the dot product of a user vector and an item vector is exactly their *cosine similarity*, between $-1$ and $1$. This stops the model inflating the length of popular items to win high scores, and it bounds the score, which is what lets us talk about a temperature next.
 
 Why two towers rather than one network that sees user and item together? A joint (*cross*) model can learn interactions such as "this user likes cheap items *only* in Beauty" and is usually more accurate, but it must run once per (user, item) pair: feasible for 2,311 items, not for 50 million. The two-tower design gives up expressive interactions to gain the ability to precompute and index one side, the right trade for stage one, because the ranker of Chapters 9 and 10 re-scores the survivors with all the cross features you like.
 
@@ -84,23 +125,51 @@ Source: Covington et al., RecSys, 2016
 
 ### Step by step
 
-Training data are positive pairs: a user and an item the user interacted with before the cutoff (click, cart or order, from `common.interaction_matrix` and `History.interactions`). We have no labelled negatives; "the user did not click" is not the same as "the user dislikes it". The standard trick is to manufacture negatives for free from the batch itself.
+Training data are **positive pairs**: a user and an item the user interacted with before the cutoff (click, cart or order, from `common.interaction_matrix` and `History.interactions`). We have no labelled **negatives**, meaning items the user rejected; "the user did not click" is not the same as "the user dislikes it". The standard trick is to manufacture negatives for free from the batch itself.
+
+### Softmax and cross-entropy in plain words
+
+Two small tools do the work, so we meet them first.
+
+**Softmax** turns any list of scores into probabilities: positive numbers that add up to 1, where a bigger score gets a bigger share. The recipe: raise $e \approx 2.718$ to the power of each score (this makes every number positive and makes big scores grow faster), then divide each result by the total. Say Sari's raw scores (called **logits**) for three items are shoes 2, watch 1 and phone case 0:
+
+| Item | Logit | $e^{\text{logit}}$ | Probability |
+|---|---|---|---|
+| Running shoes | 2 | 7.39 | $7.39 / 11.11 = 0.67$ |
+| Sports watch | 1 | 2.72 | $2.72 / 11.11 = 0.24$ |
+| Phone case | 0 | 1.00 | $1.00 / 11.11 = 0.09$ |
+
+**Cross-entropy** is the loss that grades those probabilities against the truth. If the right answer is the running shoes, the loss is $-\ln(0.67) \approx 0.40$ ($\ln$ is the natural logarithm). Picture a student taking a multiple-choice quiz who must write a confidence percentage next to the right answer. Writing 90% costs almost nothing, writing 1% costs a lot. Likewise, loss is near 0 when the model gives the right item probability near 1, and grows large as that probability approaches 0.
+
+### What in-batch negatives are
+
+Now the quiz is: "this is Sari; which of the items in the batch is the one she actually touched?" The other items in the batch are the wrong options, and they cost nothing, since they are already in memory. With $B = 3$ pairs (Sari with a cat-food bag, Budi with a phone case, Ani with running shoes), the scores form a $3 \times 3$ grid: each row is a user, each column an item. The diagonal is the right answer; every other cell in the row is a negative.
+
+| | cat food | phone case | running shoes |
+|---|---|---|---|
+| **Sari** | right answer | negative | negative |
+| **Budi** | negative | right answer | negative |
+| **Ani** | negative | negative | right answer |
+
+Everything below is this grid, with a batch of 512 instead of 3.
 
 1. Sample a batch of $B$ positive pairs $(u_1, i_1), \dots, (u_B, i_B)$.
 2. Run the user tower on every $u_b$ to get $\mathbf{u}_b$, and the item tower on every $i_b$ to get $\mathbf{v}_b$. Both are unit vectors.
-3. Build the $B \times B$ matrix of scaled scores $s_{bj} = \mathbf{u}_b \cdot \mathbf{v}_j / \tau$, where $\tau$ is the **temperature**.
+3. Build the $B \times B$ matrix of scaled scores $s_{bj} = \mathbf{u}_b \cdot \mathbf{v}_j / \tau$, where $\tau$ ("tau") is the **temperature**, explained next.
 4. Row $b$ is a $B$-way classification problem: the right answer is column $b$ (the item that user actually touched); the other $B-1$ items in the batch are treated as negatives.
-5. Minimise the cross-entropy of that classification, averaged over the batch:
+5. Minimise the cross-entropy of that classification, averaged over the batch. In words: for each row, take the softmax probability of the right column, take minus its log, and average over the rows:
 
 $$
 \mathcal{L} = -\frac{1}{B}\sum_{b=1}^{B} \log \frac{\exp(s_{bb})}{\sum_{j=1}^{B} \exp(s_{bj})}
 $$
 
-This is the **sampled softmax** idea: the full softmax over the whole catalogue would be the right objective but is far too expensive, so we approximate the denominator with the other items in the batch.
+Here $\exp(x)$ is $e^x$, $s_{bb}$ is the score of user $b$ with their true item, and the sum in the denominator adds $e^{\text{score}}$ over every item in the batch: the same recipe as the softmax table above.
+
+This is the **sampled softmax** idea: the full softmax over the whole catalogue would be the right objective but is far too expensive (it needs a score for all 2,495 items, or 50 million in a big shop), so we approximate the denominator with the other items in the batch.
 
 ### The temperature
 
-Because cosines live in $[-1, 1]$, the raw gap between a good item (0.8) and a mediocre one (0.3) is tiny to a softmax: $e^{0.8}$ versus $e^{0.3}$ is a ratio of about 1.6. Dividing by a small $\tau$ stretches the scale. With $\tau = 0.05$, as in our script, the same gap becomes 16 logit units and the softmax becomes decisive. A low temperature makes the loss care about getting the *top* of the ranking right and punishes hard negatives severely; a high temperature spreads probability more evenly and learns more gently. It is a hyperparameter you tune, usually between 0.05 and 0.2.
+The **temperature** $\tau$ is a dial that divides every score before the softmax, controlling how sharp the probabilities are. We need it because cosines live in $[-1, 1]$, so the raw gap between a good item (0.8) and a mediocre one (0.3) is tiny to a softmax: $e^{0.8}$ versus $e^{0.3}$ is a ratio of only about 1.6. Dividing by a small $\tau$ stretches the scale. With $\tau = 0.05$, as in our script, the scores become $0.8 / 0.05 = 16$ and $0.3 / 0.05 = 6$, a gap of 10 logit units, which is a ratio of about 22,000, and the softmax becomes decisive. A low temperature makes the loss care about getting the *top* of the ranking right and punishes hard negatives (wrong items that look very similar to the right one) severely; a high temperature spreads probability more evenly and learns more gently. It is a hyperparameter you tune, usually between 0.05 and 0.2.
 
 ### A worked example with hand-sized numbers
 
@@ -114,19 +183,30 @@ If training moves her cosine with item 1 to $0.9$, the probability rises to abou
 
 ### The hidden bias: who ends up as a negative?
 
-A batch is a random sample of positive pairs, so an item appears in it in proportion to its interaction count. An item with 2% of all interactions is the positive of roughly one row in fifty, and a *negative* in every other row; a rare item is almost never in the batch. Popular items are therefore over-represented as negatives relative to a uniformly random catalogue item, and the model learns "popular items are usually the wrong answer", shifting their scores down. But at serving time we score every item uniformly, so the learned popularity penalty is a systematic error that suppresses best-sellers that are genuinely relevant to many users.
+In our quiz, the wrong options are not drawn fairly. A batch is a random sample of *positive pairs*, so an item appears in it in proportion to its interaction count. An item with 2% of all interactions is the positive of roughly one row in fifty, and a *negative* in every other row it appears in; a rare item is almost never in the batch. Popular items are therefore over-represented as negatives relative to a uniformly random catalogue item, and the model learns "popular items are usually the wrong answer", shifting their scores down. But at serving time we score every item uniformly, so the learned popularity penalty is a systematic error that suppresses best-sellers that are genuinely relevant to many users.
 
 ### The logQ correction
 
-Yi et al. described the fix at Google: subtract from each logit the log of the probability that the item is drawn into the batch. If $q_j$ is the sampling probability of item $j$, define the corrected logit
+Yi et al. described the fix at Google. Let $q_j$ be the **sampling probability** of item $j$: how likely it is to be drawn into a batch, which we estimate as its share of all training pairs (a bag of cat food with 2% of the pairs has $q = 0.02$). The fix is to subtract $\log q_j$ from item $j$'s logit:
 
 $$
 s^{c}_{bj} = \frac{\mathbf{u}_b \cdot \mathbf{v}_j}{\tau} - \log q_j
 $$
 
-and use $s^c$ in the softmax. The intuition: an item that is often drawn as a negative ($q_j$ large, $\log q_j$ close to zero) gets a small boost; a rarely drawn item ($\log q_j$ very negative) gets a large boost. This exactly cancels the extra pushing-down that popular items would otherwise receive, so the dot product itself learns "fit", not "fit minus a popularity tax". In the paper the frequencies are estimated online from a stream; in our offline script we use the empirical item frequencies among training pairs.
+and to use these corrected logits $s^c$ in the softmax. Here $\log$ is the natural logarithm. For a probability below 1 it is negative, and more negative the smaller the probability: $\log 0.5 = -0.69$ and $\log 0.25 = -1.39$. So $-\log q_j$ is a small positive number for a popular item and a big positive number for a rare one.
 
-Numeric version of the same example: let item 1 be popular ($q = 0.5$) and items 2 and 3 rarer ($q = 0.25$). Then $-\log q = 0.69,\ 1.39,\ 1.39$, the corrected logits are $2.29,\ 1.99,\ 1.59$, and the probability of the true item falls from $0.62$ to about $0.45$ (loss from $0.48$ to $0.80$). The model must now separate the positive more cleanly in cosine space instead of leaning on popularity. At serving time the $-\log q$ term is dropped.
+The idea is the same as **survey weighting**. If a pollster phones 50 people in a big city and 5 in a village, she counts each village answer for more and each city answer for less, to cancel the unequal sampling. Here the popular items are the "city": they are sampled too often as wrong options, so their weight in the denominator is reduced relative to rare items. This cancels the extra pushing-down that popular items would otherwise receive, so the dot product itself learns "fit", not "fit minus a popularity tax". In the paper the frequencies are estimated online from a stream of data; in our offline script we use the empirical item frequencies (count divided by total) among the training pairs.
+
+A numeric version of the earlier example. Let item 1 be popular ($q = 0.5$) and items 2 and 3 rarer ($q = 0.25$). User 1's cosines are still $0.8, 0.3, 0.1$ with $\tau = 0.5$:
+
+| | Item 1 (true, popular) | Item 2 | Item 3 |
+|---|---|---|---|
+| Scaled logit | 1.6 | 0.6 | 0.2 |
+| $-\log q$ | 0.69 | 1.39 | 1.39 |
+| Corrected logit | 2.29 | 1.99 | 1.59 |
+| $e^{\text{corrected}}$ | 9.90 | 7.34 | 4.92 |
+
+The sum is about 22.16, so the probability of the true item falls from $0.62$ to about $0.45$ (loss from $0.48$ to $0.80$). The popular true item no longer gets a free pass just for being popular, while the rare negatives count for more. The model must now separate the positive more cleanly in cosine space instead of leaning on popularity. At serving time the $-\log q$ term is dropped.
 
 ::: fact
 **Correcting sampling bias in YouTube retrieval.** Yi et al. consider two-tower retrieval models trained with in-batch negatives, the items sampled in a random batch. They argue that this batch loss is subject to sampling bias which can severely restrict performance, particularly under a power-law item distribution. They propose an algorithm that estimates item frequency from streaming data without a fixed item vocabulary, and apply the bias-corrected approach to Neural Deep Retrieval, a YouTube system that retrieves from a corpus of tens of millions of videos.
@@ -145,11 +225,11 @@ path: book/code/ch07_two_tower.py
 symbol: Towers
 ```
 
-Read this class in four parts.
+Read this class in three parts.
 
-- **Embedding tables.** `user_emb` has one 32-dimensional row per user; `item_emb` has one row per item *plus one extra* row used as padding (`padding_idx=n_items`), so users with fewer than 20 items in their history can share a fixed-width tensor. `cat_emb`, `brand_emb` and `price_emb` are small 8-dimensional tables. Note that `item_emb` is **shared**: the item tower looks up an item's own row, and the user tower looks up the rows of the user's history items from the same table. Sharing means the vector for "running shoe A" has one meaning across both towers.
+- **Embedding tables.** `user_emb` has one 32-dimensional row per user; `item_emb` has one row per item *plus one extra* row used as **padding** (`padding_idx=n_items`): a dummy "empty slot" row, so users with fewer than 20 items in their history can still fill a fixed-width grid of numbers (a *tensor*). `cat_emb`, `brand_emb` and `price_emb` are small 8-dimensional tables. Note that `item_emb` is **shared**: the item tower looks up an item's own row, and the user tower looks up the rows of the user's history items from the same table. Sharing means the vector for "running shoe A" has one meaning across both towers.
 - **The MLPs.** `user_mlp` takes `32 + 32 + n_cats` inputs (32 for the user id, 32 for the history mean, 25 for the affinity), which is the 89 in the diagram. `item_mlp` takes `32 + 8 + 8 + 8 = 56`. Each is `Linear → ReLU → Linear` with a 64-wide hidden layer and a 32-wide output.
-- **`user_vec` and `item_vec`.** In `user_vec`, `mask` is 1 where a history slot holds a real item and 0 where it holds padding; the embeddings are masked before summing and divided by the number of real items (clamped at 1 so an empty history divides by 1). Without the mask, padding would drag every short-history user towards the same "empty" direction. The mean is concatenated with the user-id embedding and the affinities, passed through the MLP and normalised with `F.normalize`. `item_vec` is simpler: concatenate four embeddings, MLP, normalise. Crucially it takes only item attributes, with no user input, which is what lets us compute the vectors for the whole catalogue once, offline, and store them.
+- **`user_vec` and `item_vec`.** In `user_vec`, `mask` is a list of 1s and 0s that switches slots on or off: 1 where a history slot holds a real item and 0 where it holds padding. The embeddings are masked before summing and divided by the number of real items (clamped at 1 so an empty history divides by 1), which gives the average over real items only. Without the mask, padding would drag every short-history user towards the same "empty" direction. The mean is concatenated with the user-id embedding and the affinities, passed through the MLP and normalised with `F.normalize` (the L2 normalisation from the building blocks). `item_vec` is simpler: concatenate four embeddings, MLP, normalise. Crucially it takes only item attributes, with no user input, which is what lets us compute the vectors for the whole catalogue once, offline, and store them.
 
 ### The training loop
 
@@ -163,43 +243,45 @@ symbol: main.train
 Walk through the inner loop.
 
 1. `perm = torch.randperm(...)` shuffles the positive pairs each epoch; `b` is a slice of 512 of them (`BATCH`).
-2. `h = t_hist[u].clone()` fetches each user's last-20-items matrix, and the next line, `h[h == i[:, None]] = model.pad`, **blanks out the target item inside its own user's history**. Without it the user tower would see the answer it is supposed to predict, the same kind of leakage you will study in Chapter 9. The model would reach a low training loss by copying, and then fail on the held-out week where no such shortcut exists.
+2. `h = t_hist[u].clone()` fetches each user's last-20-items matrix (`.clone()` makes a private copy so the stored histories are not changed), and the next line, `h[h == i[:, None]] = model.pad`, **blanks out the target item inside its own user's history**. Without it the user tower would see the answer it is supposed to predict, the same kind of leakage you will study in Chapter 9. The model would reach a low training loss by copying, and then fail on the held-out week where no such shortcut exists.
 3. `uv` and `iv` are the user and item vectors for the batch. `logits = uv @ iv.T / TEMP` is the $B \times B$ matrix $s_{bj}$ of the algorithm.
-4. `if logq:` subtracts `log_q[i][None, :]`, where `log_q` was computed at the top of `train` as `log(count / total)` of each item among training pairs. Broadcasting subtracts $\log q_j$ from column $j$. That one line is the entire logQ correction.
+4. `if logq:` subtracts `log_q[i][None, :]`, where `log_q` was computed at the top of `train` as `log(count / total)` of each item among training pairs. *Broadcasting* (the rule that applies one row of numbers to every row of a matrix) subtracts $\log q_j$ from column $j$. That one line is the entire logQ correction.
 5. The `same` mask handles duplicates: if two users in a batch clicked the same item, that column would be a "negative" that is really a positive, so those off-diagonal entries are set to $-10^9$ and vanish from the softmax.
-6. `F.cross_entropy(logits, torch.arange(len(b)))` is the loss above (the correct column for row $b$ is $b$), followed by an Adam step with learning rate $10^{-3}$.
+6. `F.cross_entropy(logits, torch.arange(len(b)))` is the loss above (the correct column for row $b$ is $b$), followed by an Adam step (the nudge to the parameters described in the building blocks) with learning rate $10^{-3}$, that is 0.001.
 
 When the loop ends, `train` switches to eval mode and computes the item vectors for the whole catalogue and the user vectors for the evaluation users.
 
 ### Scoring and evaluation
 
-Scoring (`main.evaluate_variant` in the script) is a single matrix product, `uv_eval @ V.T`, of 947 evaluation users against the in-stock items. Users with no history before the cutoff get no model scores and are padded with 7-day popularity, because the model has "no opinion". Then `common.evaluate` computes the metrics every chapter uses: recall@K, order recall, NDCG@20 and coverage@20.
+Scoring (`main.evaluate_variant` in the script) is a single matrix product, `uv_eval @ V.T`, of 947 evaluation users against the in-stock items. Users with no history before the cutoff get no model scores and are padded with 7-day popularity, because the model has "no opinion". Then `common.evaluate` computes the metrics every chapter uses: recall@K (what share of the items the user really touched in the held-out week appear in the top K), order recall (the same, counting only items that were bought), NDCG@20 (a score that gives more credit for placing right items near the top of the list), and coverage@20 (what share of the catalogue appears in anyone's top 20).
 
 ### The ANN index, from scratch
 
-The second half of the script has no deep learning in it. IVF, the *inverted file index*, needs only a clustering routine.
+The second half of the script has no deep learning in it. IVF, the *inverted file index*, needs only a clustering routine: a way to sort points into groups of neighbours.
 
 ```include
 path: book/code/ch07_two_tower.py
 symbol: kmeans
 ```
 
-This is Lloyd's k-means with a small trick. Finding the nearest centroid by Euclidean distance is `argmax(x @ cent.T - 0.5 * ||cent||²)`: expanding $\|x - c\|^2 = \|x\|^2 - 2x\cdot c + \|c\|^2$, the $\|x\|^2$ term is the same for every centroid and can be dropped, and flipping the sign turns "minimise" into "maximise". One matrix multiplication assigns all points at once. Then each centroid moves to the mean of its points, and we repeat for 20 iterations.
+This is Lloyd's **k-means**, a method that sorts points into $k$ groups. Pick $k$ starting centres (**centroids**). Assign every point to its nearest centroid. Move each centroid to the average of the points assigned to it. Repeat. A tiny example: points $1, 2, 9, 10$ on a line with $k = 2$ and starting centroids $1$ and $10$. The assignment is $\{1, 2\}$ and $\{9, 10\}$; the centroids move to $1.5$ and $9.5$; nothing changes after that, so we stop. The code adds a small trick. Finding the nearest centroid by Euclidean (ordinary straight-line) distance is `argmax(x @ cent.T - 0.5 * ||cent||²)`: expanding $\|x - c\|^2 = \|x\|^2 - 2x\cdot c + \|c\|^2$, the $\|x\|^2$ term is the same for every centroid and can be dropped, and flipping the sign turns "minimise" into "maximise". One matrix multiplication assigns all points at once. Then each centroid moves to the mean of its points, and we repeat for 20 iterations.
 
 ## Approximate nearest neighbours
 
 ### Why brute force stops working
 
-Brute force computes the dot product of the query with every item vector and keeps the top $K$. For our 2,311 in-stock items that is trivial; for 50 million items it is about $50\text{M} \times 32 \approx 1.6$ billion multiply-adds per request, far beyond a latency budget of tens of milliseconds. But we do not need the *exact* top 50, since the ranker re-scores everything anyway; we only need a candidate list containing *most* of the true neighbours.
+**Nearest-neighbour search** means: given a query vector (the user), find the item vectors with the highest dot product with it. **Brute force** computes the dot product of the query with every item vector and keeps the top $K$, like walking every shelf in the shop. For our 2,311 in-stock items that is trivial; for 50 million items it is about $50\text{M} \times 32 \approx 1.6$ billion multiply-adds per request, far beyond a latency budget (the time we allow per request) of tens of milliseconds. But we do not need the *exact* top 50, since the ranker re-scores everything anyway; we only need a candidate list containing *most* of the true neighbours. Searching that accepts a few misses in exchange for speed is **approximate nearest-neighbour (ANN)** search.
 
 ### IVF in four steps
 
-1. **Train.** Run k-means on the item vectors to get $C$ centroids ($C = 32$ here). Assign every item to its nearest centroid. The set of items for one centroid is its *inverted list* (the "inverted file" in the name).
+IVF works like the shop's sections. Instead of walking every shelf, you ask "which two or three sections are most likely to hold it?" and search only those.
+
+1. **Train.** Run k-means on the item vectors to get $C$ centroids ($C = 32$ here). Assign every item to its nearest centroid. The set of items for one centroid is its *inverted list* (the "inverted file" in the name): a list of the items in that section.
 2. **Query: choose clusters.** For a query vector $\mathbf{q}$, score it against the $C$ centroids (cheap: $C$ dot products) and keep the `n_probe` best.
 3. **Query: scan.** Concatenate the inverted lists of those clusters and compute exact dot products only on those items.
 4. **Return the best $K$** among the scanned items.
 
-The cost is $C + n_{\text{probe}} \cdot N / C$ dot products on average, instead of $N$. For $N = 2{,}311$ and $C = 32$, probing 4 clusters scans about $4 \times 72 \approx 289$ items plus 32 centroids, versus 2,311. The price is that a true neighbour sitting in a cluster you did not probe is lost; that is where *recall versus brute force* comes from.
+The cost is $C + n_{\text{probe}} \cdot N / C$ dot products on average, instead of $N$. For $N = 2{,}311$ and $C = 32$, probing 4 clusters scans about $4 \times 72 \approx 289$ items plus 32 centroids, versus 2,311. The price is that a true neighbour sitting in a cluster you did not probe is lost; that is where *recall versus brute force* comes from. This recall asks: of the true top 20 that brute force would return, what share did the index also return? A recall of 0.9 means 18 of the 20.
 
 Picture two clouds of four items each, around $(1, 1)$ and $(5, 5)$. A query at $(1.5, 1.2)$ with `n_probe = 1` scans only the first cloud and is exact. A query at $(3, 3)$ has neighbours in both clouds, so probing one loses some; that boundary effect is what more probes repair.
 
@@ -222,7 +304,7 @@ We run the ANN demo on the spec model (`two_tower`); index quality depends on th
 Source: Malkov et al., IEEE TPAMI, 2020
 :::
 
-Graph indexes are not the only option. The FAISS library, described by Johnson et al. (2021), provides optimised designs for brute-force, approximate and product-quantisation search on GPUs; their paper reports building a k-NN graph over 1 billion vectors in under 12 hours on four GPUs. Guo et al. (2020) target maximum inner product search with an *anisotropic* quantisation loss, which penalises the error that matters for inner-product ranking rather than plain reconstruction error; Google's ScaNN library is built around this line of work. Our 2,311-item demo needs none of this, but these are the names to search for when the catalogue outgrows a single matrix product.
+Graph indexes are not the only option. The FAISS library (a widely used open-source vector-search library), described by Johnson et al. (2021), provides optimised designs for brute-force, approximate and **product-quantisation** search (storing short compressed codes in place of the full vectors, to save memory) on GPUs; their paper reports building a k-NN graph (each vector linked to its $k$ nearest neighbours) over 1 billion vectors in under 12 hours on four GPUs. Guo et al. (2020) target *maximum inner product search* (finding the largest dot products; "inner product" is another name for dot product) with an *anisotropic* quantisation loss, which penalises the error that matters for inner-product ranking rather than plain reconstruction error; Google's ScaNN library is built around this line of work. Our 2,311-item demo needs none of this, but these are the names to search for when the catalogue outgrows a single matrix product.
 
 ## Run it
 
@@ -254,7 +336,7 @@ file: results/ch07_two_tower.txt
 lines: 38-47
 ```
 
-Here is the table that surprised us. Read it row by row.
+Here is the table that surprised us. Read it row by row. As a reminder, `pop_7d` is the baseline that recommends the items with the most interactions in the last 7 days to everyone, and the metrics are the ones defined under "Scoring and evaluation" above: higher is better for recall and NDCG, while coverage says how much of the catalogue gets recommended at all.
 
 **The spec model underperforms popularity.** `two_tower` reaches an NDCG@20 of 0.0361, below the 7-day popularity baseline's 0.0475. Its recall@20 of 0.0818 is roughly on par with `pop_7d` (0.0786), and its recall@50 is better (0.1932 vs. 0.1335), so it does retrieve useful items deeper in the list, but it ranks the right ones low. On order recall, which counts only items that were actually bought, it is behind: 0.0912 against 0.1066. Training for 30 epochs (`two_tower_30ep`) does not help: NDCG@20 of 0.0357, and the loss keeps dropping, so more optimisation is not the answer.
 
@@ -268,7 +350,7 @@ An honest caveat: these are single-seed numbers on one simulated marketplace. Th
 
 ### What the embeddings look like
 
-Next, the item vectors from the spec model, squashed from 32 dimensions to two with PCA (singular value decomposition of the centred matrix, in numpy).
+Next, the item vectors from the spec model, squashed from 32 dimensions to two with **PCA** (principal component analysis). PCA finds the direction in which the points are most spread out, then the next most spread-out direction at right angles to it, and draws each point using only those two. Think of the shadow of a 3-D object on a wall: if you choose the angle well, the shadow keeps most of the object's shape, though some depth is lost. Technically, we take the singular value decomposition of the centred matrix, in numpy.
 
 ![Two-tower item embeddings projected onto their first two principal components and coloured by parent category. Pets, Sports and Mother & Baby form separate islands; Fashion, Electronics, Home & Living and others overlap in the middle.](../assets/charts/ch07-embeddings-pca.png)
 
@@ -277,7 +359,7 @@ file: results/ch07_two_tower.txt
 lines: 58-58
 ```
 
-The model was never given the parent category, only leaf category, brand and price bucket, yet items cluster by parent: Pets sit in the upper right, Sports form an island on the lower right, Mother & Baby a cloud on the left, and categories with similar shoppers overlap in the middle. But be careful: two components explain only 30.6% of the variance, so roughly 70% of the structure is invisible here, and points that look close in 2-D may be far apart in 32-D. PCA is a sanity check, not a measurement.
+The model was never given the parent category, only leaf category, brand and price bucket, yet items cluster by parent: Pets sit in the upper right, Sports form an island on the lower right, Mother & Baby a cloud on the left, and categories with similar shoppers overlap in the middle. But be careful: two components explain only 30.6% of the **variance** (a measure of how spread out the points are), so roughly 70% of the structure is invisible here, and points that look close in 2-D may be far apart in 32-D. PCA is a sanity check, not a measurement.
 
 ### The recall-versus-speed trade-off
 
@@ -294,17 +376,17 @@ The times column needs care: at 2,311 items brute force costs only 0.140 ms per 
 
 ## Pitfalls and how it is done in production
 
-**Training-serving skew.** The user tower consumes the last 20 items and the affinity vector. In production a feature pipeline must produce identical features online and offline; a small mismatch in how "last 20 items" is defined silently degrades the model (Chapter 9 treats point-in-time correctness).
+**Training-serving skew.** The model sees inputs built one way during training and another way when live. The user tower consumes the last 20 items and the affinity vector. In production a feature pipeline must produce identical features online and offline; a small mismatch in how "last 20 items" is defined silently degrades the model (Chapter 9 treats point-in-time correctness).
 
 **Embeddings drift; rebuild indexes together.** An item vector from model version 17 and a user vector from version 18 live in unrelated spaces, so the user tower and the item index ship as one versioned unit, and the index is rebuilt offline whenever the model changes.
 
 **Popularity bias hides in many places.** Any non-uniform negative sampling, or a training set that over-represents hot items, produces the same effect. The cures are similar: reweight, correct the logits, or mix in uniformly sampled negatives.
 
-**False negatives.** Our `same`-item mask removes the obvious case, but an item can still appear as a "negative" for a user who would have loved it and simply never saw it; large batches make this more likely. Hard negative mining (items the user was shown but ignored) needs the same care.
+**False negatives.** Our `same`-item mask removes the obvious case, but an item can still appear as a "negative" for a user who would have loved it and simply never saw it; large batches make this more likely. Hard negative mining (deliberately choosing items the user was shown but ignored, which look similar to the right answer) needs the same care.
 
-**Cold start is only half solved.** A new item gets a sensible vector from its category, brand and price bucket, but its item-id embedding is untrained noise. Teams either drop the id embedding below an interaction threshold or hash rare ids into shared buckets. Chapter 12 returns to cold start.
+**Cold start is only half solved.** *Cold start* means a brand-new item or user with no history. A new item gets a sensible vector from its category, brand and price bucket, but its item-id embedding is untrained noise. Teams either drop the id embedding below an interaction threshold or **hash** rare ids into shared buckets (many rare ids share one embedding row). Chapter 12 returns to cold start.
 
-**Choosing an index.** IVF is the easy baseline and is cheap to build and update. HNSW usually gives better recall at the same latency but uses more memory and handles deletions awkwardly; product quantisation compresses vectors. At our scale a single matrix product is the right answer: do not add an ANN dependency before brute force actually hurts.
+**Choosing an index.** IVF is the easy baseline and is cheap to build and update. HNSW (the graph index from the fact box) usually gives better recall at the same latency but uses more memory and handles deletions awkwardly; product quantisation compresses vectors. At our scale a single matrix product is the right answer: do not add an ANN dependency before brute force actually hurts.
 
 **How this repo does it.** The Shopee-style system of the later chapters has no two-tower stage. Its first stage is four hand-written retrievers combined in Chapter 8, and the LightGBM ranker of Chapter 10 does the heavy lifting, a sensible choice for 2,495 items. A learned retriever earns its place when the catalogue outgrows rule-based retrievers or when you want candidates beyond what co-visitation reaches; Chapter 14 shows where it would slot in. Measure it by its marginal recall over the existing sources, not by NDCG alone.
 
