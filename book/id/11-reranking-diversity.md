@@ -8,6 +8,13 @@ Tidak ada yang *salah* dengan tiap kartu; masing-masing adalah taruhan yang masu
 
 Inilah tugas tahap terakhir pipeline: **re-ranking** (pemeringkatan ulang). Tahap ini menerima daftar yang sudah diberi skor lalu memperbaiki properti yang hanya ada pada level *seluruh daftar*: keragaman, keadilan antarpenjual, item yang tidak boleh muncul lagi, item yang wajib ditampilkan bisnis, dan sedikit keacakan yang disengaja agar sistem terus belajar. Kita akan melihat re-ranker di repo (beberapa baris pandas), lalu Maximal Marginal Relevance (MMR), mengukur berapa harga diversitas dalam akurasi offline, dan menutup dengan epsilon-greedy serta Thompson sampling.
 
+Empat istilah akan terus muncul, jadi inilah artinya dalam bahasa sehari-hari:
+
+- **Ranker** (pemeringkat): model dari Bab 10 yang memberi setiap item kandidat sebuah skor. Skor lebih tinggi berarti "pembeli ini lebih mungkin menginginkannya".
+- **ndcg@20** (*normalised discounted cumulative gain*, "seberapa tinggi item yang benar ada di 20 teratas?"): skor dari 0 sampai 1. Nilainya lebih tinggi bila item yang benar-benar kemudian dibeli pembeli berada dekat bagian atas daftar 20 kartu.
+- **recall@K** ("berapa banyak item yang benar masuk daftar?"): dari item yang benar-benar dibeli pembeli, persentase yang muncul di K teratas.
+- **Aturan bisnis** (*business rule*): aturan yang datang dari kebutuhan perusahaan, bukan dari pola dalam data. "Jangan tampilkan kulkas yang sudah dibeli pembeli" dan "tidak lebih dari empat item dari satu toko" adalah aturan bisnis. Ranker tidak bisa mempelajarinya dari klik, jadi kita menerapkannya secara manual.
+
 ![Beranda "Recommended for you" di aplikasi kita: baris pertama didominasi susu formula, dengan make-up terselip di antaranya. Inilah halaman yang dirancang untuk diperbaiki oleh re-ranker.](../assets/screenshots/home-user.png)
 
 ### Yang akan Anda pelajari
@@ -23,13 +30,13 @@ Inilah tugas tahap terakhir pipeline: **re-ranking** (pemeringkatan ulang). Taha
 
 Pikirkan cara pemilik toko menata etalase. Ia tidak mengurutkan stok berdasarkan margin keuntungan lalu memajang dua belas item teratas berjajar. Kalau dua belas produk terlaris semuanya sepatu lari, etalase itu berkata "kami jual sepatu lari", dan pejalan kaki yang butuh jaket akan lewat begitu saja. Ia memilih *himpunan* item yang bersama-sama menyampaikan sesuatu: sepatu, jaket, tas, hadiah. Setiap item di etalase sedikit lebih buruk daripada item terbaik yang bisa ia pilih untuk slot itu, tetapi *etalasenya* lebih baik, karena item-itemnya saling melengkapi, bukan saling menggandakan.
 
-Beranda rekomendasi adalah sebuah etalase. Ranker di Bab 10 adalah pemilik toko yang mengurutkan berdasarkan margin. Ia menjawab "seberapa besar kemungkinan pengguna ini berinteraksi dengan item ini?" untuk tiap item secara independen, dan independensi itulah masalahnya: setelah Anda menampilkan satu kaleng susu formula, probabilitas bahwa kaleng kedua berguna tidak sama dengan probabilitas awalnya. Ekonom menyebutnya *diminishing marginal utility* (utilitas marjinal yang menurun); dalam information retrieval disebut *redundansi*.
+Beranda rekomendasi adalah sebuah etalase. Ranker di Bab 10 adalah pemilik toko yang mengurutkan berdasarkan margin. Ia menjawab "seberapa besar kemungkinan pengguna ini berinteraksi dengan item ini?" untuk tiap item secara independen, dan independensi itulah masalahnya: setelah Anda menampilkan satu kaleng susu formula, peluang bahwa kaleng kedua berguna lebih rendah daripada peluang kaleng pertama. Bayangkan kue. Potongan pertama adalah hadiah, yang kedua enak, yang kelima terasa membosankan. Ekonom menyebutnya *diminishing marginal utility* (utilitas marjinal yang menurun: setiap tambahan yang sama bernilai lebih kecil dari sebelumnya); dalam information retrieval disebut *redundansi* (item baru hanya mengulang apa yang sudah dikatakan halaman).
 
 Ada tiga keluarga logika re-ranking dan kita akan bertemu semuanya:
 
-1. **Filter** membuang item yang tidak boleh muncul (sudah dibeli, disembunyikan, stok habis).
-2. **Tujuan level daftar** seperti diversitas: nilai sebuah item bergantung pada apa yang sudah ada di halaman.
-3. **Eksplorasi**: kadang sebuah item ditaruh di halaman karena sistem *belum yakin* tentangnya, bukan karena ia taruhan terbaik.
+1. **Filter** membuang item yang tidak boleh muncul (sudah dibeli, disembunyikan, stok habis). Artinya: pemeriksaan ya/tidak pada tiap item.
+2. **Tujuan level daftar** seperti diversitas: nilai sebuah item bergantung pada apa yang sudah ada di halaman. Artinya: kita menilai halaman secara keseluruhan, bukan tiap kartu sendiri-sendiri.
+3. **Eksplorasi**: kadang sebuah item ditaruh di halaman karena sistem *belum yakin* tentangnya, bukan karena ia taruhan terbaik. Artinya: sesekali mencoba hal baru agar kita tahu apakah ia bagus.
 
 ```mermaid
 flowchart LR
@@ -49,34 +56,38 @@ flowchart LR
 
 ### Filter: aturan sudah-dibeli
 
-Aturan paling sederhana adalah *filter sudah-dibeli* (*already-bought filter*). Kita membuang item jika pengguna pernah memesannya dan kategorinya bukan barang habis pakai (*consumable*). Orang yang bulan lalu membeli kulkas tidak perlu melihat kulkas yang sama lagi; orang yang bulan lalu membeli kopi sangat mungkin perlu. Di simulator (dan di skema pada Bab 1) setiap kategori memiliki flag `is_consumable`, yang di tabel fitur muncul sebagai `item_is_consumable`, dan fitur riwayat `ui_orders` menghitung berapa kali pengguna ini memesan item ini. Aturannya:
+Aturan paling sederhana adalah *filter sudah-dibeli* (*already-bought filter*): **jangan tampilkan sesuatu yang sudah dimiliki pembeli, kecuali jenis barang yang memang dibeli berulang.** Pembeli Sari bulan lalu membeli kulkas; menampilkan kulkas yang sama hanya membuang ruang. Sari juga membeli sekantong kopi bulan lalu; ia sangat mungkin ingin kopi lagi, jadi kopi tetap tampil. Secara formal, kita membuang item jika pengguna pernah memesannya dan kategorinya bukan barang habis pakai (*consumable*: barang yang dipakai habis lalu dibeli lagi, seperti kopi atau popok). Di simulator (dan di skema pada Bab 1) setiap kategori memiliki flag `is_consumable`, yang di tabel fitur muncul sebagai `item_is_consumable`, dan fitur riwayat `ui_orders` menghitung berapa kali pengguna ini memesan item ini. Aturannya:
 
 $$\text{drop}(u, i) \iff \text{ui\_orders}(u,i) > 0 \ \wedge\ \text{item\_is\_consumable}(i) = 0 .$$
+
+Bacalah: "buang item $i$ untuk pengguna $u$ tepat ketika (pengguna pernah memesannya setidaknya sekali) **dan** (kategorinya bukan barang habis pakai)". Untuk kulkas Sari, `ui_orders` bernilai 1 dan `item_is_consumable` bernilai 0, jadi dibuang. Untuk kopinya, `item_is_consumable` bernilai 1, jadi tetap tampil.
 
 Item yang disembunyikan (pengguna menekan "Not interested") dan item yang stoknya habis dibuang lebih awal, di `candidates.generate`, yang lebih murah karena kita tidak menghitung fitur untuk baris yang tidak akan pernah ditampilkan.
 
 ### Cap: diversitas ala kadarnya
 
-Aturan kedua membatasi berapa banyak item dari satu kategori dan satu toko yang boleh muncul. Urutkan item pengguna berdasarkan skor. Beri nomor $0, 1, 2, \dots$ pada item tiap kategori menurut urutan skor, dan lakukan hal yang sama untuk tiap toko. Pertahankan sebuah item hanya jika posisinya dalam kategori di bawah $C_{\text{cat}}$ dan posisinya dalam toko di bawah $C_{\text{shop}}$. Di repo $C_{\text{cat}} = 8$ dan $C_{\text{shop}} = 4$. Lalu ambil $K$ item pertama yang lolos.
+Aturan kedua membatasi berapa banyak item dari satu kategori dan satu toko yang boleh muncul. Ini seperti label rak "maksimal dua per pelanggan": yang terbaik tetap lolos, tetapi tak seorang pun bisa mengambil semuanya. Berikut contoh kecil dengan cap 2 per kategori (ilustratif; repo memakai cap yang lebih besar). Kandidat Sari, skor terbaik lebih dulu: casing ponsel (toko X), casing ponsel (toko X), casing ponsel (toko Y), makanan kucing (toko Z). Dua casing ponsel pertama adalah urutan ke-0 dan ke-1 dalam kategorinya, jadi lolos. Casing ketiga adalah urutan ke-2, yang tidak di bawah cap 2, sehingga dibuang, meskipun skornya lebih tinggi daripada makanan kucing. Makanan kucing adalah urutan ke-0 kategorinya dan lolos.
+
+Secara formal: urutkan item pengguna berdasarkan skor. Beri nomor $0, 1, 2, \dots$ pada item tiap kategori menurut urutan skor, dan lakukan hal yang sama untuk tiap toko. Pertahankan sebuah item hanya jika posisinya dalam kategori di bawah $C_{\text{cat}}$ dan posisinya dalam toko di bawah $C_{\text{shop}}$. Di repo $C_{\text{cat}} = 8$ dan $C_{\text{shop}} = 4$. Lalu ambil $K$ item pertama yang lolos ($K$ adalah panjang halaman, di sini 20).
 
 Cap itu kasar tetapi ampuh. Ia memberi jaminan keras (tidak ada halaman yang memuat lebih dari empat item dari satu toko) dengan harga sama sekali tidak peka terhadap seberapa *mirip* item-itemnya. Dua casing ponsel dari dua toko berbeda, keduanya di kategori "Phone Cases", bagi manusia nyaris kembar, namun cap mengizinkan delapan di antaranya.
 
 ### Maximal Marginal Relevance
 
-MMR, diusulkan oleh Carbonell dan Goldstein untuk mengurutkan ulang hasil pencarian dan ringkasan, adalah jawaban klasik untuk "bagaimana menghukum kemiripan terhadap apa yang sudah ada di halaman?". Algoritmanya serakah (*greedy*). Mulai dari daftar kosong $S$. Pada tiap langkah pilih item $i$ dari kandidat tersisa $R$ yang memaksimalkan
+**MMR menyusun halaman satu slot demi satu slot, dan tiap pilihan harus sekaligus bagus dan berbeda dari yang sudah ada di halaman.** Bayangkan memesan hidangan bersama teman. Anda memesan hidangan yang paling menggoda lebih dulu. Untuk pilihan kedua, Anda tidak ingin yang hampir sama, jadi hidangan yang mirip kehilangan poin meski kedengarannya enak; hidangan berbeda dengan daya tarik sedikit lebih rendah yang menang. MMR melakukan persis ini dengan sebuah skor untuk tiap item yang tersisa. Gagasan ini diusulkan oleh Carbonell dan Goldstein untuk mengurutkan ulang hasil pencarian dan ringkasan, dan menjadi jawaban klasik untuk "bagaimana menghukum kemiripan terhadap apa yang sudah ada di halaman?". Metodenya *greedy* (serakah): pada tiap langkah ia mengambil pilihan yang tampak terbaik saat itu dan tidak pernah kembali mengubah pilihan sebelumnya. Mulai dari daftar kosong $S$. Pada tiap langkah pilih item $i$ dari kandidat tersisa $R$ yang memaksimalkan
 
 $$\text{MMR}(i) = \lambda \cdot \text{rel}(i) - (1-\lambda) \cdot \max_{j \in S} \text{sim}(i, j),$$
 
-dengan $\text{rel}(i)$ adalah relevansi (di sini, skor ranker yang diskalakan ke $[0, 1]$ per pengguna) dan $\text{sim}(i,j) \in [0,1]$ mengukur seberapa mirip dua item. Parameter $\lambda \in [0,1]$ adalah kenop pengatur. Pada $\lambda = 1$ suku kedua lenyap dan MMR mereproduksi peringkat asli. Pada $\lambda = 0$ relevansi diabaikan dan Anda mendapat daftar yang tersebar maksimal. Untuk pilihan pertama himpunan $S$ kosong, sehingga penalti nol menurut konvensi, dan item peringkat teratas selalu muncul pertama.
+dengan $\text{rel}(i)$ adalah relevansi (seberapa besar kemungkinan pembeli menginginkan item itu; di sini, skor ranker yang diskalakan ke $[0, 1]$ per pengguna) dan $\text{sim}(i,j) \in [0,1]$ mengukur seberapa mirip dua item (1 = nyaris identik, 0 = tak berkaitan). Bagian $\max_{j \in S}$ berarti "lihat halaman sejauh ini dan ambil item yang *paling* mirip di sana". Parameter $\lambda$ (huruf Yunani "lambda", antara 0 dan 1) adalah kenop pengatur antara relevansi dan keragaman. Pada $\lambda = 1$ suku kedua lenyap dan MMR mereproduksi peringkat asli. Pada $\lambda = 0$ relevansi diabaikan dan Anda mendapat daftar yang tersebar maksimal. Untuk pilihan pertama himpunan $S$ kosong, sehingga penalti nol menurut konvensi, dan item peringkat teratas selalu muncul pertama.
 
 Algoritma dalam langkah bernomor:
 
 1. Skalakan skor tiap pengguna ke $[0,1]$: $\text{rel}(i) = (s_i - s_{\min}) / (s_{\max} - s_{\min})$.
-2. Hitung lebih dulu matriks kemiripan berpasangan untuk kandidat pengguna ini. Di skrip pendamping kita, $\text{sim} = 1$ untuk kategori yang sama, $0.5$ untuk kategori induk yang sama, dan $0$ selain itu.
+2. Hitung lebih dulu matriks kemiripan berpasangan untuk kandidat pengguna ini (tabel dengan satu baris dan satu kolom per kandidat, tiap sel menyatakan seberapa mirip dua item itu). Di skrip pendamping kita, $\text{sim} = 1$ untuk kategori yang sama, $0.5$ untuk kategori induk yang sama (misalnya Dog Toys dan Cat Food sama-sama di bawah Pets), dan $0$ selain itu.
 3. Untuk setiap kandidat tersisa, simpan kemiripan terbesar terhadap item mana pun yang sudah terpilih.
-4. Ulangi $K$ kali: hitung skor MMR setiap item tersisa, pilih argmax-nya, tandai sebagai terambil, dan perbarui nilai maksimum berjalan dari kemiripan.
+4. Ulangi $K$ kali: hitung skor MMR setiap item tersisa, pilih argmax-nya (item dengan skor tertinggi), tandai sebagai terambil, dan perbarui nilai maksimum berjalan dari kemiripan.
 
-Biayanya $O(K \cdot n)$ per pengguna setelah matriks kemiripan ada, dan membangun matriks itu $O(n^2)$. Dengan $n \approx 100$ kandidat, itu beberapa ribu operasi; sepele.
+Biayanya $O(K \cdot n)$ per pengguna setelah matriks kemiripan ada (kira-kira "$K$ kali jumlah kandidat $n$" langkah), dan membangun matriks itu $O(n^2)$ (setiap kandidat dibandingkan dengan setiap kandidat lain). Dengan $n \approx 100$ kandidat, itu beberapa ribu operasi; sepele.
 
 #### Contoh hitungan dengan empat item
 
@@ -100,15 +111,21 @@ Urutan akhirnya A, C, D, B. B, kembaran Phones itu, turun dari tempat kedua ke t
 
 ### Eksplorasi: memberi kesempatan pada item yang belum pasti
 
-Semua yang di atas mengasumsikan skor ranker benar, padahal ranker hanya tahu apa yang pernah dilihatnya. Item yang tidak pernah ditampilkan tidak punya klik, sehingga model memberinya skor rendah, sehingga ia tidak pernah ditampilkan: sebuah *feedback loop* (lingkaran umpan balik) yang kita pelajari di Bab 12. Obat buku teksnya adalah kerangka **multi-armed bandit**: tiap item adalah sebuah "lengan" dengan probabilitas klik yang tidak diketahui, dan setiap impresi sekaligus mendatangkan reward dan mengajari kita tentang lengan itu.
+Semua yang di atas mengasumsikan skor ranker benar, padahal ranker hanya tahu apa yang pernah dilihatnya. Item yang tidak pernah ditampilkan tidak punya klik, sehingga model memberinya skor rendah, sehingga ia tidak pernah ditampilkan: sebuah *feedback loop* (lingkaran umpan balik) yang kita pelajari di Bab 12. Tanpa eksplorasi, item baru yang hebat bisa tersembunyi selamanya.
 
-**Epsilon-greedy** adalah kebijakan paling sederhana: dengan probabilitas $1-\varepsilon$ tampilkan item terbaik menurut model, selain itu tampilkan item acak dari sebuah kolam. Dengan $\varepsilon = 0.1$ pada halaman 20 slot, rata-rata dua slot bersifat eksploratif. Implementasinya sepele dan boros: slot acak sama mungkin memilih item dengan 50 impresi dan klik rate buruk seperti item dengan 2 impresi dan potensi yang belum diketahui.
+Bayangkan memilih tempat makan siang. Kalau Anda selalu ke restoran terbaik yang Anda kenal, Anda tidak akan pernah menemukan tempat baru yang mungkin lebih baik lagi. Tetapi mencoba tempat acak setiap hari membuang banyak makan siang. Versi buku teks dari dilema ini adalah masalah **multi-armed bandit** (dinamai dari mesin slot, "one-armed bandit"): tiap item adalah sebuah "lengan" dengan probabilitas klik yang tidak diketahui, dan setiap *impresi* (satu kali item ditampilkan kepada pembeli) berpeluang mendatangkan klik (reward) sekaligus mengajari kita tentang item itu.
 
-**Thompson sampling** lebih cerdas soal *di mana* bereksplorasi. Untuk setiap item, pertahankan distribusi probabilitas atas klik rate $\theta$-nya. Dengan prior Beta dan umpan balik klik/tidak-klik, ini bersifat konjugat: setelah $c$ klik dan $n-c$ non-klik, dimulai dari prior seragam $\text{Beta}(1,1)$,
+**Epsilon-greedy** adalah kebijakan paling sederhana: dengan probabilitas $1-\varepsilon$ ($\varepsilon$ adalah huruf Yunani epsilon, bilangan kecil seperti 0.1) tampilkan item terbaik menurut model, selain itu tampilkan item acak dari sebuah kolam. Dalam istilah makan siang: sembilan hari dari sepuluh Anda ke tempat favorit, satu hari dari sepuluh Anda memilih tempat acak. Dengan $\varepsilon = 0.1$ pada halaman 20 slot, rata-rata dua slot bersifat eksploratif. Implementasinya sepele dan boros: slot acak sama mungkin memilih item dengan 50 impresi dan klik rate buruk seperti item dengan 2 impresi dan potensi yang belum diketahui.
+
+**Thompson sampling** lebih cerdas soal *di mana* bereksplorasi. Berikut gagasannya dengan koin. Setiap item berperilaku seperti koin yang peluang "gambar"-nya (sebuah klik) tidak kita ketahui. Tampilkan item 10 kali dan lihat 3 klik: klik rate sebenarnya mungkin dekat 0.3, tetapi 0.2 atau 0.45 pun tidak mengejutkan. Tampilkan 0 kali: rate mana pun dari 0 sampai 1 masuk akal. Jadi untuk tiap item kita menyimpan sebuah *kurva yang menyatakan seberapa masuk akal setiap klik rate*. Kurva sempit berarti kita cukup yakin; kurva lebar berarti kita belum tahu.
+
+Kurva itu punya nama: **distribusi Beta**, ditulis $\text{Beta}(a, b)$. Anggap $a$ sebagai "jumlah klik sejauh ini, ditambah 1" dan $b$ sebagai "jumlah non-klik sejauh ini, ditambah 1". "Tambah 1" berasal dari asumsi awal kita, yang disebut **prior**: sebelum melihat data apa pun, setiap klik rate dari 0 sampai 1 sama masuk akalnya, yaitu kurva datar $\text{Beta}(1,1)$. Setelah kita mengamati data, kurva yang diperbarui disebut **posterior**. Pembaruan ini sederhana (istilah teknisnya *konjugat*, artinya kurva baru berjenis sama dengan kurva lama, hanya dengan angka baru): setelah $c$ klik dan $n-c$ non-klik,
 
 $$\theta \mid \text{data} \sim \text{Beta}(1 + c,\ 1 + n - c), \qquad \mathbb{E}[\theta] = \frac{1+c}{2+n}, \qquad \text{Var}[\theta] = \frac{ab}{(a+b)^2(a+b+1)} .$$
 
-Untuk memilih apa yang ditampilkan, *tarik satu sampel acak dari distribusi Beta tiap item dan urutkan berdasarkan hasil tarikan*. Item dengan banyak bukti memiliki distribusi sempit; item dengan sedikit bukti memiliki distribusi lebar dan kadang menarik angka tinggi, yang memberinya sebuah impresi. Seiring bukti terkumpul, eksplorasi padam dengan sendirinya, tanpa $\varepsilon$ yang harus disetel.
+Dalam kata-kata: $\theta$ (theta) adalah klik rate sebenarnya dari item yang tidak diketahui; $\mathbb{E}[\theta]$ adalah rerata kurva, tebakan tunggal terbaik kita untuk $\theta$; $\text{Var}[\theta]$ (varians) mengukur selebar apa kurva itu, dan akarnya adalah *simpangan baku* (jarak khas dari rerata). Di sini $a = 1 + c$ dan $b = 1 + n - c$. Untuk item dengan 10 impresi dan 3 klik, $a = 4$, $b = 8$, sehingga reratanya $4/12 \approx 0.333$.
+
+Untuk memilih apa yang ditampilkan, *tarik satu sampel acak dari distribusi Beta tiap item dan urutkan berdasarkan hasil tarikan*. Item dengan banyak bukti memiliki kurva sempit, sehingga tarikannya jatuh dekat reratanya. Item dengan sedikit bukti memiliki kurva lebar dan kadang menarik angka tinggi, yang memberinya sebuah impresi. Seiring bukti terkumpul, eksplorasi padam dengan sendirinya, tanpa $\varepsilon$ yang harus disetel.
 
 #### Contoh Thompson yang dihitung
 
@@ -120,7 +137,7 @@ Tiga item, prior seragam:
 | B (tampil dua kali, tanpa klik) | 2 | 0 | Beta(1, 3) | 0.250 | 0.194 |
 | C (baru sama sekali) | 0 | 0 | Beta(1, 1) | 0.500 | 0.289 |
 
-Rerata-nya adalah $4/12$, $1/4$, dan $1/2$. Variansnya mengikuti rumus: untuk A, $ab/((a+b)^2(a+b+1)) = 32/(144 \times 13) \approx 0.0171$, sehingga simpangan bakunya sekitar $0.131$; untuk B adalah $3/(16 \times 5) = 0.0375$ (simpangan baku $0.194$); untuk C adalah $1/(4 \times 3) = 0.0833$ (simpangan baku $0.289$).
+Rerata-nya adalah $4/12$, $1/4$, dan $1/2$. Variansnya mengikuti rumus: untuk A, $ab/((a+b)^2(a+b+1)) = 32/(144 \times 13) \approx 0.0171$, sehingga simpangan bakunya sekitar $0.131$; untuk B adalah $3/(16 \times 5) = 0.0375$ (simpangan baku $0.194$); untuk C adalah $1/(4 \times 3) = 0.0833$ (simpangan baku $0.289$). Perhatikan bahwa simpangan baku membesar seiring bukti mengecil: A (10 impresi) paling sempit, C (tanpa impresi) paling lebar. Lebar itulah yang membuat C sesekali memenangkan tarikan.
 
 Misalkan satu ronde sampling menghasilkan tarikan (ilustratif) A = 0.31, B = 0.18, C = 0.77. Urutannya C, A, B: pendatang baru yang belum dikenal tampil pertama. Jika C kemudian mendapat 1 klik dari 1 impresi, ia menjadi Beta(2, 1) dengan rerata $0.667$; jika ia mendapat nol klik dalam 5 impresi, ia menjadi Beta(1, 6), rerata $0.143$, dan jarang menang tarikan lagi. Sistem bereksplorasi persis sebanyak ketidakpastiannya.
 
@@ -155,7 +172,7 @@ symbol: rerank
 
 Bacalah baris demi baris. `scored` memiliki satu baris per kandidat `(user_id, item_id)` dengan `score` dari ranker ditambah kolom-kolom yang dibutuhkan aturan. Pernyataan pertama membangun mask boolean `bought_durable`; yang kedua membuang baris-baris itu dan mengurutkan berdasarkan pengguna lalu skor menurun, yang diandalkan oleh baris-baris berikutnya.
 
-Lalu datang triknya. `groupby(["user_id", "category_id"]).cumcount()` menomori baris di dalam tiap grup menurut urutan saat ini, mulai dari nol. Karena frame sudah terurut berdasarkan skor, nomor itu persis berarti "berapa banyak item berskor lebih tinggi dari kategori ini yang sudah dimiliki pengguna ini". Hal yang sama dilakukan per toko. Sebuah baris lolos bila kedua penghitung berada di bawah batasnya (`MAX_PER_CATEGORY = 8`, `MAX_PER_SHOP = 4`, didefinisikan di awal modul). Terakhir `groupby("user_id").head(k)` memotong daftar tiap pengguna menjadi $k$ item. Fungsi ini sepenuhnya tervektorisasi, dan itu penting: saat evaluasi training ia berjalan untuk ribuan pengguna sekaligus, dan di RPC `Recommend` langsung ia berjalan pada frame satu pengguna.
+Lalu datang triknya. `groupby(["user_id", "category_id"]).cumcount()` menomori baris di dalam tiap grup menurut urutan saat ini, mulai dari nol. Karena frame sudah terurut berdasarkan skor, nomor itu persis berarti "berapa banyak item berskor lebih tinggi dari kategori ini yang sudah dimiliki pengguna ini". Hal yang sama dilakukan per toko. Sebuah baris lolos bila kedua penghitung berada di bawah batasnya (`MAX_PER_CATEGORY = 8`, `MAX_PER_SHOP = 4`, didefinisikan di awal modul). Terakhir `groupby("user_id").head(k)` memotong daftar tiap pengguna menjadi $k$ item. Fungsi ini sepenuhnya tervektorisasi (*vectorised*: bekerja pada seluruh kolom sekaligus, bukan mengulang baris satu per satu di Python), dan itu penting: saat evaluasi training ia berjalan untuk ribuan pengguna sekaligus, dan di RPC `Recommend` langsung (*remote procedure call*, permintaan yang dikirim aplikasi ke layanan rekomendasi) ia berjalan pada frame satu pengguna.
 
 ### Skrip pendamping MMR
 
@@ -205,6 +222,8 @@ lines: 16-21
 
 ## Hasil: berapa harga diversitas?
 
+Pengingat tentang ukuran di tabel, dalam bahasa sehari-hari. **ndcg@20** dan **recall@5/20/50** menanyakan apakah item yang kemudian benar-benar dibeli pembeli muncul di 5, 20, atau 50 teratas (makin tinggi makin baik). **distinct_categories@20** menghitung berapa kategori berbeda muncul di 20 teratas seorang pengguna, dirata-rata atas pengguna: ukuran keragaman kita (makin tinggi makin beragam). **coverage@20** adalah persentase seluruh katalog yang muncul di 20 teratas *siapa pun*: ia menunjukkan apakah sistem memakai banyak produk atau terus menampilkan beberapa produk yang sama.
+
 Mulai dari baris pertama. `MMR lambda=1.0` adalah peringkat LambdaMART tanpa diubah (dengan $\lambda = 1$ penalti dikalikan nol): ndcg@20 sebesar 0.2116 dan recall@20 sebesar 0.2725. Top 20 berisi rata-rata 5.33 kategori berbeda. Itulah baseline kita: kira-kira lima jenis produk berbeda pada halaman 20 kartu. Tidak buruk, tetapi belum etalase.
 
 ![Trade-off antara ndcg@20 offline dan rata-rata jumlah kategori berbeda di 20 teratas, untuk lima pengaturan MMR dan untuk varian berbasis aturan di repo.](../assets/charts/ch11-mmr-tradeoff.png)
@@ -231,15 +250,15 @@ Satu peringatan: label offline berasal dari pengguna yang melihat apa pun yang d
 
 ### Keadilan bagi penjual
 
-Marketplace itu dua sisi: pembeli menginginkan relevansi, penjual ingin terlihat. Ranker yang dilatih pada engagement memberi toko mapan lebih banyak impresi, maka lebih banyak ulasan: lingkaran yang kaya makin kaya yang bisa mematikan penjual baru yang bagus. Cap per toko adalah aturan keadilan yang kasar. Pendekatan yang lebih berprinsip bekerja dengan *eksposur*: karena perhatian menurun tajam menurut peringkat (Bab 12), slot 15 bukanlah slot 1. Singh dan Joachims memformalkan batasan atas eksposur yang diterima item atau kelompok relatif terhadap merit mereka, dan memberikan algoritma yang memaksimalkan utilitas pengguna dengan batasan itu. Dalam praktik, marketplace mengimplementasikan versi sederhana, seperti slot minimum bagi penjual baru atau anggaran eksposur harian per toko.
+Marketplace itu dua sisi: pembeli menginginkan relevansi, penjual ingin terlihat. Ranker yang dilatih pada engagement memberi toko mapan lebih banyak impresi, maka lebih banyak ulasan: lingkaran yang kaya makin kaya yang bisa mematikan penjual baru yang bagus. Cap per toko adalah aturan keadilan yang kasar. Pendekatan yang lebih berprinsip bekerja dengan *eksposur* (seberapa banyak perhatian yang benar-benar diterima sebuah item): karena perhatian menurun tajam menurut peringkat (Bab 12), slot 15 bukanlah slot 1. Singh dan Joachims memformalkan batasan atas eksposur yang diterima item atau kelompok relatif terhadap merit mereka (kualitas sebenarnya), dan memberikan algoritma yang memaksimalkan utilitas pengguna (total manfaat bagi pembeli) dengan batasan itu. Dalam praktik, marketplace mengimplementasikan versi sederhana, seperti slot minimum bagi penjual baru atau anggaran eksposur harian per toko.
 
 ### Iklan, boost, dan slot bersponsor
 
-Hampir setiap marketplace menjual penempatan iklan. Aturan desainnya: **jangan mengotori ranker dengan uang iklan.** Iklan disisipkan *setelah* ranker, di posisi tetap (katakanlah slot 3, 8, dan 13), dipilih oleh lelang terpisah yang menimbang tawaran dan prediksi klik rate, dan diberi label "Sponsored". Boost kampanye ("semua item sale 9.9 mendapat $+0.05$") juga sebaiknya menjadi suku yang terlihat di re-ranker dengan tanggal mulai dan selesai, bukan perubahan pada data training; kalau tidak, pelatihan ulang berikutnya memperlakukan impresi hasil boost sebagai bukti organik dan menanamkan kampanye itu ke dalam model.
+Hampir setiap marketplace menjual penempatan iklan. Aturan desainnya: **jangan mengotori ranker dengan uang iklan.** Iklan disisipkan *setelah* ranker, di posisi tetap (katakanlah slot 3, 8, dan 13), dipilih oleh lelang terpisah (penjual menawar untuk slot itu) yang menimbang tawaran dan prediksi klik rate, dan diberi label "Sponsored". Boost kampanye ("semua item sale 9.9 mendapat $+0.05$", artinya kita menambah 0.05 pada skornya) juga sebaiknya menjadi suku yang terlihat di re-ranker dengan tanggal mulai dan selesai, bukan perubahan pada data training; kalau tidak, pelatihan ulang berikutnya memperlakukan impresi hasil boost sebagai bukti organik (klik yang terjadi secara alami, tanpa dorongan dari kita) dan menanamkan kampanye itu ke dalam model.
 
 ### Eksplorasi di re-ranker
 
-Dalam praktik, jalankan pipeline seperti biasa, lalu tukar item pada sebagian $\varepsilon$ dari *slot* (bukan pengguna) dengan kandidat yang kurang terekspos, sebaiknya di separuh bawah halaman; untuk Thompson sampling, simpan hitungan klik dan impresi per item di feature store dan campurkan satu tarikan Beta per kandidat ke dalam skor. Bagaimanapun caranya, **catat slot mana yang eksploratif dan dengan probabilitas berapa**; kalau tidak, datanya tetap bias seperti sebelumnya dan tidak bisa dikoreksi (inverse propensity weighting, Bab 12).
+Dalam praktik, jalankan pipeline seperti biasa, lalu tukar item pada sebagian $\varepsilon$ dari *slot* (bukan pengguna) dengan kandidat yang kurang terekspos, sebaiknya di separuh bawah halaman; untuk Thompson sampling, simpan hitungan klik dan impresi per item di feature store (basis data input model yang siap pakai) dan campurkan satu tarikan Beta per kandidat ke dalam skor. Bagaimanapun caranya, **catat slot mana yang eksploratif dan dengan probabilitas berapa**; kalau tidak, datanya tetap bias seperti sebelumnya dan tidak bisa dikoreksi (inverse propensity weighting, Bab 12: memberi tiap contoh yang tercatat sebuah bobot yang menetralkan betapa kecil peluangnya untuk ditampilkan).
 
 ## Jebakan dan praktik produksi
 

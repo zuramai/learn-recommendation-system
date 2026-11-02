@@ -8,6 +8,13 @@ Nothing is *wrong* with any single card; each is a defensible bet. But the *page
 
 This is the job of the last stage of the pipeline: **re-ranking**. It takes the scored list and fixes properties that only exist at the level of the *whole list*: variety, fairness between sellers, things the user must never see again, things the business must show, and a little deliberate randomness so the system keeps learning. We look at the repo's re-ranker (a few lines of pandas), then Maximal Marginal Relevance (MMR), measure what diversity costs in offline accuracy, and finish with epsilon-greedy and Thompson sampling.
 
+Four terms come up again and again, so here they are in plain words:
+
+- **Ranker**: the model from Chapter 10 that gives every candidate item a score. Higher score means "more likely this shopper wants it".
+- **ndcg@20** (normalised discounted cumulative gain, "how high are the right items in the top 20?"): a score from 0 to 1. It is higher when the items the shopper really went on to buy sit near the top of the 20-card list.
+- **recall@K** ("how many of the right items made the list?"): of the items the shopper really bought, the share that appear in the top K.
+- **Business rule**: a rule that comes from what the company needs, not from patterns in the data. "Never show a refrigerator the shopper already bought" and "no more than four items from one shop" are business rules. The ranker cannot learn them from clicks, so we apply them by hand.
+
 ![The "Recommended for you" home page in our app: the first row is dominated by baby formula, with makeup mixed in. This is the page a re-ranker is designed to improve.](../assets/screenshots/home-user.png)
 
 ### What you'll learn
@@ -23,13 +30,13 @@ This is the job of the last stage of the pipeline: **re-ranking**. It takes the 
 
 Think about how a shop owner dresses a window. She does not sort her stock by profit margin and then put the top twelve items in a row. If the twelve best sellers are all running shoes, the window says "we sell running shoes", and passers-by who need a coat walk on. She chooses a *set* of items that together say something: a shoe, a coat, a bag, a gift. Each item in the window is slightly worse than the single best item she could have chosen for its slot, but the *window* is better, because the items complement rather than duplicate each other.
 
-A recommender home page is a window. The ranker of Chapter 10 is the owner who sorts by margin. It answers "how likely is this user to engage with this item?" for each item independently, and independence is exactly the problem: after you have shown one baby-formula tin, the probability that a second one is useful is not the same as the probability it had before. Economists call this *diminishing marginal utility*; in information retrieval it is called *redundancy*.
+A recommender home page is a window. The ranker of Chapter 10 is the owner who sorts by margin. It answers "how likely is this user to engage with this item?" for each item independently, and independence is exactly the problem: after you have shown one baby-formula tin, the chance that a second one is useful is lower than the chance the first one had. Think of cake. The first slice is a treat, the second is nice, the fifth is a chore. Economists call this *diminishing marginal utility* (each extra copy is worth less than the last); in information retrieval it is called *redundancy* (the new item repeats what the page already says).
 
 There are three families of re-ranking logic and we will meet all of them:
 
-1. **Filters** remove items that must not appear (already bought, hidden, out of stock).
-2. **List-level objectives** such as diversity: the value of an item depends on what is already on the page.
-3. **Exploration**: sometimes put an item on the page because the system is *uncertain* about it, not because it is the best bet.
+1. **Filters** remove items that must not appear (already bought, hidden, out of stock). Plain meaning: a yes/no check on each item.
+2. **List-level objectives** such as diversity: the value of an item depends on what is already on the page. Plain meaning: we judge the page as a whole, not each card alone.
+3. **Exploration**: sometimes put an item on the page because the system is *uncertain* about it, not because it is the best bet. Plain meaning: occasionally try something new so we can learn whether it is good.
 
 ```mermaid
 flowchart LR
@@ -49,34 +56,38 @@ flowchart LR
 
 ### Filters: the already-bought rule
 
-The simplest rule is the *already-bought filter*. We drop an item if the user ordered it before and the category is not consumable. Someone who bought a refrigerator last month does not need to see that exact refrigerator; someone who bought coffee last month very probably does. In the simulator (and in the schema from Chapter 1) each category has an `is_consumable` flag, which the feature table exposes as `item_is_consumable`, and the history feature `ui_orders` counts how many times this user ordered this item. The rule is
+The simplest rule is the *already-bought filter*: **do not show something the shopper already owns, unless it is the kind of thing people buy again.** Shopper Sari bought a refrigerator last month; showing her that same refrigerator is wasted space. Sari also bought a bag of coffee last month; she very probably wants coffee again, so coffee stays. Formally, we drop an item if the user ordered it before and the category is not consumable (a *consumable* is something used up and re-bought, like coffee or diapers). In the simulator (and in the schema from Chapter 1) each category has an `is_consumable` flag, which the feature table exposes as `item_is_consumable`, and the history feature `ui_orders` counts how many times this user ordered this item. The rule is
 
 $$\text{drop}(u, i) \iff \text{ui\_orders}(u,i) > 0 \ \wedge\ \text{item\_is\_consumable}(i) = 0 .$$
+
+Read it as: "drop item $i$ for user $u$ exactly when (the user has ordered it at least once) **and** (its category is not consumable)". For Sari's refrigerator, `ui_orders` is 1 and `item_is_consumable` is 0, so it is dropped. For her coffee, `item_is_consumable` is 1, so it stays.
 
 Hidden items (the user pressed "Not interested") and out-of-stock items are removed earlier, in `candidates.generate`, which is cheaper because we do not compute features for rows that will never be shown.
 
 ### Caps: a poor man's diversity
 
-The second rule limits how many items from one category and one shop may appear. Sort the user's items by score. Number the items of each category $0, 1, 2, \dots$ in score order and do the same for each shop. Keep an item only if its position within its category is below $C_{\text{cat}}$ and its position within its shop is below $C_{\text{shop}}$. In the repo $C_{\text{cat}} = 8$ and $C_{\text{shop}} = 4$. Then take the first $K$ survivors.
+The second rule limits how many items from one category and one shop may appear. It is like a shelf label that says "maximum two per customer": the best ones still get through, but nobody can take them all. Here is a tiny example with a cap of 2 per category (illustrative; the repo uses larger caps). Sari's candidates, best score first, are: phone case (shop X), phone case (shop X), phone case (shop Y), cat food (shop Z). The first two phone cases are the 0th and 1st of their category, so they stay. The third phone case is the 2nd, which is not below the cap of 2, so it is dropped, even though it scores higher than the cat food. Cat food is the 0th of its category and stays.
+
+Formally: sort the user's items by score. Number the items of each category $0, 1, 2, \dots$ in score order and do the same for each shop. Keep an item only if its position within its category is below $C_{\text{cat}}$ and its position within its shop is below $C_{\text{shop}}$. In the repo $C_{\text{cat}} = 8$ and $C_{\text{shop}} = 4$. Then take the first $K$ survivors ($K$ is the page length, here 20).
 
 Caps are blunt but powerful. They give a hard guarantee (no page ever has more than four items from one shop) at the cost of being completely insensitive to how *similar* the items are. Two phone cases from two different shops, both in the "Phone Cases" category, are to a human near-duplicates, yet the caps allow eight of them.
 
 ### Maximal Marginal Relevance
 
-MMR, proposed by Carbonell and Goldstein for reordering search results and summaries, is the classic answer to "how do we penalise similarity to what is already on the page?". It is greedy. Start with the empty list $S$. At each step pick the item $i$ from the remaining candidates $R$ that maximises
+**MMR builds the page one slot at a time, and each pick must be both good and different from what is already on the page.** Picture ordering dishes with friends. You first order the best-sounding dish. For the second, you do not want something nearly identical, so a similar dish loses points even if it sounds great; a different dish with slightly lower appeal wins. MMR does exactly this with a score for every remaining item. The idea was proposed by Carbonell and Goldstein for reordering search results and summaries, and it is the classic answer to "how do we penalise similarity to what is already on the page?". The method is *greedy*: at each step it takes the best-looking choice right now and never goes back to change earlier picks. Start with the empty list $S$. At each step pick the item $i$ from the remaining candidates $R$ that maximises
 
 $$\text{MMR}(i) = \lambda \cdot \text{rel}(i) - (1-\lambda) \cdot \max_{j \in S} \text{sim}(i, j),$$
 
-where $\text{rel}(i)$ is the relevance (here, the ranker score rescaled to $[0, 1]$ per user) and $\text{sim}(i,j) \in [0,1]$ measures how similar two items are. The parameter $\lambda \in [0,1]$ is a dial. At $\lambda = 1$ the second term vanishes and MMR reproduces the original ranking. At $\lambda = 0$ relevance is ignored and you get a maximally spread list. For the first pick the set $S$ is empty, so the penalty is zero by convention, and the top-ranked item always comes first.
+where $\text{rel}(i)$ is the relevance (how much the shopper is likely to want the item; here, the ranker score rescaled to $[0, 1]$ per user) and $\text{sim}(i,j) \in [0,1]$ measures how similar two items are (1 = near-identical, 0 = unrelated). The $\max_{j \in S}$ part means "look at the page so far and take the *most* similar item already there". The parameter $\lambda$ (Greek letter "lambda", between 0 and 1) is a dial between relevance and variety. At $\lambda = 1$ the second term vanishes and MMR reproduces the original ranking. At $\lambda = 0$ relevance is ignored and you get a maximally spread list. For the first pick the set $S$ is empty, so the penalty is zero by convention, and the top-ranked item always comes first.
 
 The algorithm in numbered steps:
 
 1. Scale each user's scores to $[0,1]$: $\text{rel}(i) = (s_i - s_{\min}) / (s_{\max} - s_{\min})$.
-2. Precompute the pairwise similarity matrix for this user's candidates. In our companion script, $\text{sim} = 1$ for the same category, $0.5$ for the same parent category, and $0$ otherwise.
+2. Precompute the pairwise similarity matrix for this user's candidates (a table with one row and one column per candidate, where each cell says how similar those two items are). In our companion script, $\text{sim} = 1$ for the same category, $0.5$ for the same parent category (for example Dog Toys and Cat Food are both under Pets), and $0$ otherwise.
 3. Maintain, for every remaining candidate, the largest similarity to any selected item so far.
-4. Repeat $K$ times: compute the MMR score of every remaining item, select the argmax, mark it taken, and update the running maximum of similarities.
+4. Repeat $K$ times: compute the MMR score of every remaining item, select the argmax (the item with the highest score), mark it taken, and update the running maximum of similarities.
 
-The cost is $O(K \cdot n)$ per user after the similarity matrix exists, and building the matrix is $O(n^2)$. With $n \approx 100$ candidates that is a few thousand operations; trivial.
+The cost is $O(K \cdot n)$ per user after the similarity matrix exists (roughly "$K$ times the number of candidates $n$" steps), and building the matrix is $O(n^2)$ (every candidate compared with every other). With $n \approx 100$ candidates that is a few thousand operations; trivial.
 
 #### A worked example with four items
 
@@ -100,15 +111,21 @@ The final order is A, C, D, B. The Phones twin B fell from second place to last.
 
 ### Exploration: giving uncertain items a chance
 
-Everything so far assumes the ranker's scores are right, but the ranker only knows what it has seen. An item never shown has no clicks, so the model scores it low, so it is never shown: a *feedback loop* we study in Chapter 12. The textbook remedy is the **multi-armed bandit** framework: each item is an "arm" with an unknown click probability, and every impression both earns reward and teaches us about the arm.
+Everything so far assumes the ranker's scores are right, but the ranker only knows what it has seen. An item never shown has no clicks, so the model scores it low, so it is never shown: a *feedback loop* we study in Chapter 12. Without exploration, a great new item can stay hidden forever.
 
-**Epsilon-greedy** is the simplest policy: with probability $1-\varepsilon$ show the model's best item, otherwise a random one from a pool. With $\varepsilon = 0.1$ on a 20-slot page, two slots are exploratory on average. It is trivial to implement and wasteful: the random slot is as likely to pick an item with 50 impressions and a dismal click rate as one with 2 impressions and unknown potential.
+Think of choosing a lunch place. If you always go to the best restaurant you know, you will never discover the new place that might be even better. But trying a random place every day wastes lunches. The textbook version of this dilemma is the **multi-armed bandit** problem (named after slot machines, "one-armed bandits"): each item is an "arm" with an unknown click probability, and every *impression* (one showing of the item to a shopper) both may earn a click (the reward) and teaches us about that item.
 
-**Thompson sampling** is smarter about *where* to explore. For each item, maintain a probability distribution over its click rate $\theta$. With a Beta prior and click/no-click feedback, this is conjugate: after $c$ clicks and $n-c$ non-clicks, starting from a uniform $\text{Beta}(1,1)$ prior,
+**Epsilon-greedy** is the simplest policy: with probability $1-\varepsilon$ ($\varepsilon$ is the Greek letter epsilon, a small number like 0.1) show the model's best item, otherwise a random one from a pool. In lunch terms: nine days out of ten you go to your favourite, one day in ten you pick a random place. With $\varepsilon = 0.1$ on a 20-slot page, two slots are exploratory on average. It is trivial to implement and wasteful: the random slot is as likely to pick an item with 50 impressions and a dismal click rate as one with 2 impressions and unknown potential.
+
+**Thompson sampling** is smarter about *where* to explore. Here is the idea with a coin. Each item behaves like a coin whose chance of "heads" (a click) we do not know. Show the item 10 times and see 3 clicks: the true click rate is probably near 0.3, but 0.2 or 0.45 would not surprise us. Show it 0 times: any rate from 0 to 1 is plausible. So for each item we keep a *curve that says how plausible each click rate is*. A narrow curve means we are fairly sure; a wide curve means we do not know yet.
+
+The curve has a name: the **Beta distribution**, written $\text{Beta}(a, b)$. You can think of $a$ as "clicks so far, plus 1" and $b$ as "non-clicks so far, plus 1". The "plus 1" comes from our starting assumption, called the **prior**: before seeing any data, every click rate from 0 to 1 is equally plausible, which is the flat curve $\text{Beta}(1,1)$. After we observe data, the updated curve is called the **posterior**. This update is simple (the technical word is *conjugate*, meaning the new curve is the same kind of curve as the old one, just with new numbers): after $c$ clicks and $n-c$ non-clicks,
 
 $$\theta \mid \text{data} \sim \text{Beta}(1 + c,\ 1 + n - c), \qquad \mathbb{E}[\theta] = \frac{1+c}{2+n}, \qquad \text{Var}[\theta] = \frac{ab}{(a+b)^2(a+b+1)} .$$
 
-To choose what to show, *draw one random sample from each item's Beta distribution and rank by the draws*. An item with lots of evidence has a narrow distribution; an item with little evidence has a wide one and sometimes draws a high number, which earns it an impression. As evidence accumulates exploration dies out by itself, with no tunable $\varepsilon$.
+In words: $\theta$ (theta) is the item's unknown true click rate; $\mathbb{E}[\theta]$ is the curve's average, our best single guess of $\theta$; $\text{Var}[\theta]$ (the variance) measures how wide the curve is, and its square root is the *standard deviation* (the typical distance from the average). Here $a = 1 + c$ and $b = 1 + n - c$. For an item with 10 impressions and 3 clicks, $a = 4$, $b = 8$, so the average is $4/12 \approx 0.333$.
+
+To choose what to show, *draw one random sample from each item's Beta distribution and rank by the draws*. An item with lots of evidence has a narrow curve, so its draw lands close to its average. An item with little evidence has a wide curve and sometimes draws a high number, which earns it an impression. As evidence accumulates, exploration dies out by itself, with no tunable $\varepsilon$.
 
 #### A worked Thompson example
 
@@ -120,7 +137,7 @@ Three items, uniform prior:
 | B (shown twice, no clicks) | 2 | 0 | Beta(1, 3) | 0.250 | 0.194 |
 | C (brand new) | 0 | 0 | Beta(1, 1) | 0.500 | 0.289 |
 
-The means are $4/12$, $1/4$ and $1/2$. The variances follow from the formula: for A, $ab/((a+b)^2(a+b+1)) = 32/(144 \times 13) \approx 0.0171$, so the standard deviation is about $0.131$; for B it is $3/(16 \times 5) = 0.0375$ (std $0.194$); for C it is $1/(4 \times 3) = 0.0833$ (std $0.289$).
+The means are $4/12$, $1/4$ and $1/2$. The variances follow from the formula: for A, $ab/((a+b)^2(a+b+1)) = 32/(144 \times 13) \approx 0.0171$, so the standard deviation is about $0.131$; for B it is $3/(16 \times 5) = 0.0375$ (std $0.194$); for C it is $1/(4 \times 3) = 0.0833$ (std $0.289$). Notice that the standard deviation grows as the evidence shrinks: A (10 impressions) is narrowest, C (none) is widest. That width is what lets C win a draw now and then.
 
 Suppose one round of sampling yields the (illustrative) draws A = 0.31, B = 0.18, C = 0.77. The order is C, A, B: the unknown newcomer is shown first. If C then gets 1 click in 1 impression it becomes Beta(2, 1) with mean $0.667$; if it gets zero clicks in 5 impressions it becomes Beta(1, 6), mean $0.143$, and rarely wins another draw. The system explores exactly as much as it is uncertain.
 
@@ -155,7 +172,7 @@ symbol: rerank
 
 Read it line by line. `scored` has one row per `(user_id, item_id)` candidate with the ranker's `score` plus the columns the rules need. The first statement builds the boolean mask `bought_durable`; the second drops those rows and sorts by user and descending score, which the following lines depend on.
 
-Then comes the trick. `groupby(["user_id", "category_id"]).cumcount()` numbers the rows inside each group in their current order, starting from zero. Because the frame is already sorted by score, the number is exactly "how many higher-scored items of this category does this user already have". The same is done per shop. A row survives when both counters are under their limits (`MAX_PER_CATEGORY = 8`, `MAX_PER_SHOP = 4`, defined at the top of the module). Finally `groupby("user_id").head(k)` truncates each user's list to $k$ items. The function is fully vectorised, which matters: during training evaluation it runs for thousands of users at once, and in the live `Recommend` RPC it runs on one user's frame.
+Then comes the trick. `groupby(["user_id", "category_id"]).cumcount()` numbers the rows inside each group in their current order, starting from zero. Because the frame is already sorted by score, the number is exactly "how many higher-scored items of this category does this user already have". The same is done per shop. A row survives when both counters are under their limits (`MAX_PER_CATEGORY = 8`, `MAX_PER_SHOP = 4`, defined at the top of the module). Finally `groupby("user_id").head(k)` truncates each user's list to $k$ items. The function is fully *vectorised* (it works on whole columns at once instead of looping over rows in Python), which matters: during training evaluation it runs for thousands of users at once, and in the live `Recommend` RPC (remote procedure call, the request the app sends to the recommender service) it runs on one user's frame.
 
 ### The MMR companion script
 
@@ -205,6 +222,8 @@ lines: 16-21
 
 ## Results: what does diversity cost?
 
+A reminder of the measures in the table, in plain words. **ndcg@20** and **recall@5/20/50** ask whether the items the shopper really bought later appear in the top 5, 20 or 50 (higher is better). **distinct_categories@20** counts how many different categories appear in a user's top 20, averaged over users: our measure of variety (higher means more varied). **coverage@20** is the share of the whole catalogue that shows up in *anyone's* top 20: it tells us whether the system uses many products or keeps showing the same few.
+
 Start with the first row. `MMR lambda=1.0` is the LambdaMART ranking untouched (with $\lambda = 1$ the penalty is multiplied by zero): ndcg@20 of 0.2116 and recall@20 of 0.2725. The top 20 contains on average 5.33 distinct categories. That is our baseline: roughly five different kinds of product on a 20-card page. Not terrible, but not a window either.
 
 ![Trade-off between offline ndcg@20 and the mean number of distinct categories in the top 20, for five MMR settings and for the repo's rule-based variants.](../assets/charts/ch11-mmr-tradeoff.png)
@@ -231,15 +250,15 @@ A caution: the offline labels come from users who saw whatever the *old* system 
 
 ### Fairness to sellers
 
-A marketplace is two-sided: buyers want relevance, sellers want to be seen. A ranker trained on engagement gives established shops more impressions, hence more reviews: a rich-get-richer loop that can starve a good new seller. The per-shop cap is a crude fairness rule. More principled approaches work with *exposure*: since attention decays steeply with rank (Chapter 12), slot 15 is not slot 1. Singh and Joachims formalised constraints on the exposure items or groups receive relative to their merit and gave algorithms that maximise user utility subject to them. In practice marketplaces implement simple versions, such as minimum slots for new sellers or a per-shop daily exposure budget.
+A marketplace is two-sided: buyers want relevance, sellers want to be seen. A ranker trained on engagement gives established shops more impressions, hence more reviews: a rich-get-richer loop that can starve a good new seller. The per-shop cap is a crude fairness rule. More principled approaches work with *exposure* (how much attention an item actually receives): since attention decays steeply with rank (Chapter 12), slot 15 is not slot 1. Singh and Joachims formalised constraints on the exposure items or groups receive relative to their merit and gave algorithms that maximise user utility (total benefit to shoppers) subject to them. In practice marketplaces implement simple versions, such as minimum slots for new sellers or a per-shop daily exposure budget.
 
 ### Ads, boosts and sponsored slots
 
-Almost every marketplace sells advertising placement. The design rule is **do not contaminate the ranker with ad money.** Ads are inserted *after* the ranker, into fixed positions (say slots 3, 8 and 13), chosen by a separate auction that weighs the bid and a predicted click rate, and labelled "Sponsored". A campaign boost ("all 9.9 sale items get $+0.05$") should likewise be a visible term in the re-ranker with a start and end date, not a change to the training data; otherwise the next retraining treats boosted impressions as organic evidence and bakes the campaign into the model.
+Almost every marketplace sells advertising placement. The design rule is **do not contaminate the ranker with ad money.** Ads are inserted *after* the ranker, into fixed positions (say slots 3, 8 and 13), chosen by a separate auction (sellers bid for the slot) that weighs the bid and a predicted click rate, and labelled "Sponsored". A campaign boost ("all 9.9 sale items get $+0.05$", meaning we add 0.05 to their score) should likewise be a visible term in the re-ranker with a start and end date, not a change to the training data; otherwise the next retraining treats boosted impressions as organic evidence (clicks that happened naturally, without a push from us) and bakes the campaign into the model.
 
 ### Exploration in the re-ranker
 
-In practice, run the pipeline as usual, then swap the item in a fraction $\varepsilon$ of *slots* (not users) for an under-exposed candidate, preferably in the lower half of the page; for Thompson sampling, keep click and impression counts per item in a feature store and blend one Beta draw per candidate into the score. Either way, **log which slots were exploratory and with what probability**; otherwise the data stays as biased as before and cannot be corrected (inverse propensity weighting, Chapter 12).
+In practice, run the pipeline as usual, then swap the item in a fraction $\varepsilon$ of *slots* (not users) for an under-exposed candidate, preferably in the lower half of the page; for Thompson sampling, keep click and impression counts per item in a feature store (a database of ready-to-use model inputs) and blend one Beta draw per candidate into the score. Either way, **log which slots were exploratory and with what probability**; otherwise the data stays as biased as before and cannot be corrected (inverse propensity weighting, Chapter 12: giving each logged example a weight that undoes how unlikely it was to be shown).
 
 ## Pitfalls and production practice
 
