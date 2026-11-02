@@ -1,0 +1,49 @@
+syntax = "proto3";
+package recommender.v1;
+
+service Recommender {
+  // Personalised home feed. user_id = 0 means anonymous (gets trending-driven results).
+  rpc Recommend(RecommendRequest) returns (RecommendResponse);
+  // "Similar items" on a product page: co-visitation, then same-category popular.
+  rpc SimilarItems(SimilarItemsRequest) returns (RecommendResponse);
+  // Retrain the ranker on the current DB contents and hot-swap it.
+  rpc Retrain(RetrainRequest) returns (RetrainResponse);
+  // Model version, metrics, feature importance + feature descriptions (for the learning page).
+  rpc ModelInfo(ModelInfoRequest) returns (ModelInfoResponse);
+}
+
+message RecommendRequest { int64 user_id = 1; int32 k = 2; string surface = 3; }
+message SimilarItemsRequest { int64 item_id = 1; int32 k = 2; int64 user_id = 3; }
+
+message Contribution {
+  string feature = 1;       // schema feature name, e.g. "uc_click_share_30d"
+  double value = 2;         // the feature's value for this (user, item)
+  double contribution = 3;  // LightGBM SHAP contribution to the score (+ pushes up)
+}
+message RecommendedItem {
+  int64 item_id = 1;
+  double score = 2;
+  string source = 3;  // "recent" | "covisit" | "category_popular" | "trending" | "same_category"
+  int32 rank = 4;     // 1-based
+  repeated Contribution contributions = 5;  // top 5 by |contribution|; empty for SimilarItems
+}
+message RecommendResponse {
+  repeated RecommendedItem items = 1;
+  string model_version = 2;
+  int64 candidates_considered = 3;
+  double latency_ms = 4;
+}
+
+message RetrainRequest {}
+message RetrainResponse { string model_version = 1; map<string, double> metrics = 2; int64 train_rows = 3; }
+
+message ModelInfoRequest {}
+message FeatureInfo { string name = 1; string group = 2; string description = 3; double gain_share = 4; }
+message ModelInfoResponse {
+  string model_version = 1;
+  string trained_at = 2;               // ISO-8601 UTC
+  map<string, double> metrics = 3;     // keys "<method>/<metric>", e.g. "lightgbm_ranker/ndcg@20", plus "candidate_recall"
+  repeated FeatureInfo features = 4;   // all schema.FEATURES, sorted by gain_share desc
+  int64 events_loaded = 5;
+  int64 train_rows = 6;
+}
