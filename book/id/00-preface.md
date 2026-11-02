@@ -4,6 +4,29 @@ Buka aplikasi Shopee pada Selasa malam. Sebelum Anda mengetik satu huruf pun, la
 
 *Pipeline* itu adalah **sistem rekomendasi** (*recommender system*). Buku ini mengajarkan cara kerjanya dengan membangun satu: mula-mula daftar item paling populer, lalu, bab demi bab, setiap gagasan yang mengubah daftar itu menjadi sistem multi-tahap modern.
 
+## Gambaran besar dengan bahasa sederhana
+
+Sebuah recommender menjawab satu pertanyaan: **"Dari semua yang kami jual, beberapa item mana yang sebaiknya dilihat orang ini sekarang?"** Ia memakai petunjuk yang sudah dimiliki toko: apa yang pernah diklik dan dibeli orang itu, serta apa yang dilakukan orang-orang yang mirip.
+
+Kesulitannya ada pada ukuran. Marketplace seperti milik kita punya ribuan item (jutaan di aplikasi sungguhan), sedangkan layar hanya muat sekitar empat puluh. Kita tidak mungkin menilai setiap item dengan cermat untuk setiap pengunjung dalam sepersekian detik sebelum halaman tampil. Maka sistem sungguhan bekerja seperti pramuniaga yang mengambilkan barang dari gudang raksasa untuk seorang pelanggan:
+
+1. **Retrieval (pembangkitan kandidat): ambil satu troli penuh dari gudang.** Pramuniaga tidak memeriksa setiap kardus. Ia berjalan ke lorong hewan peliharaan dan lorong aksesori ponsel, karena riwayat Sari menunjukkan ia menyukainya, lalu mengambil beberapa ratus kardus dengan cepat. Langkah ini harus *cepat*, dan boleh agak kasar. Beberapa ratus item yang dihasilkannya adalah **kandidat** (*candidate*).
+2. **Ranking (pemeringkatan): periksa dengan teliti dan urutkan isi troli.** Kini pramuniaga hanya memegang beberapa ratus kardus, sehingga ia sanggup memeriksa satu per satu: seberapa besar kemungkinan Sari mengeklik ini, mengingat rentang harganya, pesanan sebelumnya, dan jam saat ini? Setiap kandidat mendapat skor dan daftar diurutkan dari terbaik ke terburuk. Langkah ini *presisi* tetapi lambat per item, itulah sebabnya ia hanya melihat kandidat.
+3. **Re-ranking (pemeringkatan ulang): menata etalase.** Jika diurutkan hanya berdasarkan skor, sepuluh teratas bisa berupa sepuluh casing ponsel yang nyaris sama. Pramuniaga menata ulang agar bervariasi, menurunkan produk yang stoknya habis, dan mengikuti aturan toko, misalnya tidak menampilkan penjual yang sama lima kali berturut-turut. Sentuhan akhir ini disebut **re-ranking**.
+
+```mermaid
+flowchart LR
+    W["Semua item<br/>(gudang)"] -->|"1. Retrieval<br/>cepat dan kasar"| C["Beberapa ratus<br/>kandidat"]
+    C -->|"2. Ranking<br/>lambat dan presisi"| R["Daftar berskor<br/>dan terurut"]
+    R -->|"3. Re-ranking<br/>variasi dan aturan"| P["Sekitar 40 item<br/>yang dilihat Sari"]
+```
+
+*Gambar: Corong tiga tahap. Setiap tahap melihat lebih sedikit item daripada tahap sebelumnya, sehingga sanggup bekerja lebih banyak per item.*
+
+Corong ini ada karena sebuah pertukaran: penilaian yang cermat memakan waktu, sedangkan waktu terbatas, jadi kita menghabiskan usaha murah untuk banyak item dan usaha mahal untuk sedikit item. Tanpa corong, Anda akan menampilkan halaman yang lambat (menilai semuanya dengan cermat) atau rekomendasi yang buruk (menilai semuanya dengan kasar).
+
+Kita membangun bentuk persis ini selangkah demi selangkah. Pertama, di Bab 3 sampai 7, satu metode mencoba mengerjakan seluruh tugas. Lalu Bab 8 sampai 12 membagi pekerjaan menjadi tiga tahap di atas.
+
 ## Buku ini untuk siapa
 
 Buku ini ditulis untuk **software engineer tingkat menengah**: Anda nyaman membaca Python, mengenal REST dan SQL, dan pernah merilis kode ke produksi. Latar belakang *machine learning* tidak diperlukan; setiap bagian matematika dijelaskan saat pertama kali muncul dan dipakai pada contoh kecil yang dihitung dengan tangan. Semuanya berjalan di laptop dalam hitungan menit, tanpa GPU.
@@ -11,16 +34,16 @@ Buku ini ditulis untuk **software engineer tingkat menengah**: Anda nyaman memba
 Dua janji membentuk seluruh isi buku ini:
 
 1. **Setiap algoritma dijelaskan selangkah demi selangkah.** Anda akan melihat intuisi, rumus, contoh hitungan, lalu kode sungguhan yang mengimplementasikannya.
-2. **Setiap angka dalam teks berasal dari program yang bisa Anda jalankan.** Tidak ada hasil dalam buku ini yang diketik tangan. Setiap bab punya skrip pendamping; keluarannya ditempel ke buku langsung dari berkas yang ditangkap saat skrip dijalankan. Jika Anda menjalankan ulang skripnya, Anda akan mendapat angka yang sama, karena semua *random seed* dikunci.
+2. **Setiap angka dalam teks berasal dari program yang bisa Anda jalankan.** Tidak ada hasil dalam buku ini yang diketik tangan. Setiap bab punya skrip pendamping; keluarannya ditempel ke buku langsung dari berkas yang ditangkap saat skrip dijalankan. Jika Anda menjalankan ulang skripnya, Anda akan mendapat angka yang sama, karena semua *random seed* dikunci. *Random seed* ibarat melempar dadu dalam permainan di mana semua orang mendapat angka yang sama dengan urutan yang sama: bagian "acak" pada simulasi dan pelatihan menghasilkan hasil identik setiap kali dijalankan, sehingga angka Anda cocok dengan angka di buku.
 
 ## Bentuk buku ini
 
 Buku ini mengikuti jalur historis dan praktis bidangnya. Setiap bab menambahkan perangkat baru hanya setelah pendekatan sebelumnya menunjukkan batasnya pada data yang sama.
 
-- **Fondasi (Bab 1–2).** Masalahnya, datanya, dan penggarisnya: precision, recall, NDCG, dan evaluasi berbasis waktu.
-- **Recommender model tunggal (Bab 3–7).** Popularitas, *content-based filtering*, *collaborative filtering*, faktorisasi matriks, serta *embedding* dengan *retrieval* dua menara (*two-tower*).
-- **Sistem multi-tahap (Bab 8–12).** Marketplace sungguhan menjalankan sebuah corong (*funnel*): tahap murah mengambil beberapa ratus **kandidat** (*candidate*), tahap presisi **memeringkat** (*rank*) kandidat itu, dan tahap akhir **memeringkat ulang** (*re-rank*) demi keberagaman dan aturan bisnis. Bab-bab ini membahas pembangkitan kandidat, rekayasa fitur, *learning to rank*, *re-ranking*, serta *cold start*, konteks, dan bias.
-- **Produksi (Bab 13–14).** Sebuah aplikasi Vue, Rust, Postgres, dan Python gRPC yang berjalan, tempat Anda mengikuti satu klik dari ujung ke ujung, lalu apa yang berubah pada puluhan juta pengguna.
+- **Fondasi (Bab 1–2).** Masalahnya, datanya, dan penggarisnya: precision, recall, NDCG, dan evaluasi berbasis waktu. Singkatnya, tiga skor untuk menjawab "seberapa bagus daftar ini?" dan kebiasaan menguji recommender pada hari-hari yang belum pernah dilihatnya.
+- **Recommender model tunggal (Bab 3–7).** Satu metode mengerjakan seluruh tugas. Popularitas (tampilkan yang disukai semua orang), *content-based filtering* (sarankan item yang deskripsinya mirip dengan yang Anda sukai), *collaborative filtering* (sarankan yang disukai orang-orang yang mirip dengan Anda), faktorisasi matriks (memampatkan selera semua orang menjadi beberapa angka tersembunyi), serta *embedding* dengan *retrieval* dua menara (*two-tower*) (mengubah pengguna dan item menjadi deretan angka sehingga "dekat" berarti "cocok"). Setiap istilah dijelaskan dari nol di babnya masing-masing.
+- **Sistem multi-tahap (Bab 8–12).** Marketplace sungguhan menjalankan sebuah corong (*funnel*), yang dijelaskan di bagian berikutnya: tahap murah mengambil beberapa ratus **kandidat** (*candidate*), tahap presisi **memeringkat** (*rank*) kandidat itu, dan tahap akhir **memeringkat ulang** (*re-rank*) demi keberagaman dan aturan bisnis. Bab-bab ini membahas pembangkitan kandidat, rekayasa fitur (mengubah log mentah menjadi angka yang berguna bagi model), *learning to rank*, *re-ranking*, serta *cold start*, konteks, dan bias.
+- **Produksi (Bab 13–14).** Sebuah aplikasi Vue (halaman web), Rust (server), Postgres (basis data), dan Python gRPC yang berjalan, tempat Anda mengikuti satu klik dari ujung ke ujung, lalu apa yang berubah pada puluhan juta pengguna.
 
 Lampiran berisi jawaban kuis, glosarium, perintah reproduksi, dan daftar pustaka.
 
@@ -64,7 +87,9 @@ Setiap direktori punya satu tugas:
 | `docs/` | `GUIDE.md`, panduan berbahasa sederhana tentang aplikasi yang berjalan | Bab 13 |
 | `book/` | Bab, grafik, tangkapan layar, dan perangkat build untuk PDF yang sedang Anda baca | – |
 
-Dua keputusan desain muncul berulang kali. **Rust menulis semua perilaku pengguna ke Postgres; Python hanya membacanya**, lewat koneksi hanya-baca. Dan **rekomendasi dihitung saat diminta**, sehingga klik lima detik lalu sudah bisa mengubah beranda, sementara model dilatih ulang secara berkala.
+Dua keputusan desain muncul berulang kali. **Rust menulis semua perilaku pengguna ke Postgres; Python hanya membacanya**, lewat koneksi hanya-baca (koneksi yang bisa melihat data tetapi tidak bisa mengubahnya, sehingga recommender tidak akan pernah merusak catatan toko). Dan **rekomendasi dihitung saat diminta**, artinya daftar dibangun pada saat Anda membuka halaman, sehingga klik lima detik lalu sudah bisa mengubah beranda, sementara model (bagian yang dipelajari) dilatih ulang secara berkala di latar belakang.
+
+Beberapa istilah pada tabel di atas, dengan bahasa sederhana. **gRPC** adalah cara agar dua program, di sini program Rust dan program Python, saling memanggil fungsi lewat jaringan. **Berkas `.proto`** adalah kesepakatan tertulis tentang panggilan apa saja yang ada dan apa yang dibawanya. **LightGBM** adalah pustaka yang belajar menilai item; Bab 10 menjelaskannya.
 
 ## Persiapan
 
@@ -112,7 +137,7 @@ Lalu buka `http://localhost:5173`. Data seed menyertakan akun demo seperti `user
 
 ## Contoh berjalan: marketplace simulasi
 
-Log marketplace asli bersifat privat, dan dataset publik tidak memuat posisi, durasi tinggal (*dwell time*), dan stok, sehingga buku ini memakai **marketplace simulasi** yang disertakan dalam repositori. Karena kita sendiri yang menulis simulatornya, kita juga tahu kebenaran tersembunyi di balik perilaku itu, yang dipakai Bab 1 untuk menunjukkan bagaimana data log memelintir apa yang sebenarnya diinginkan pengguna.
+Log marketplace asli bersifat privat, dan dataset publik tidak memuat posisi (di mana item ditampilkan di halaman), durasi tinggal (*dwell time*, berapa lama pengguna bertahan di item itu), dan stok, sehingga buku ini memakai **marketplace simulasi** yang disertakan dalam repositori: toko pura-pura kecil yang dijalankan program, dengan pembeli pura-pura yang menjelajah dan membeli. Karena kita sendiri yang menulis simulatornya, kita juga tahu kebenaran tersembunyi di balik perilaku itu, yang dipakai Bab 1 untuk menunjukkan bagaimana data log memelintir apa yang sebenarnya diinginkan pengguna.
 
 Simulasi bawaan, yang dikonfigurasi di `recommender/recsys/simulate.py`, memiliki 1,500 pengguna, 2,500 item, 150 toko, dan 60 hari aktivitas, dengan *seed* tetap. Skrip Bab 1 mengonfirmasi ukuran tabelnya:
 
@@ -121,19 +146,21 @@ file: results/ch01_explore.txt
 lines: 2-9
 ```
 
-Selain ukurannya, simulator mereproduksi pola-pola yang membuat rekomendasi menarik:
+Selain ukurannya, simulator mereproduksi pola-pola yang membuat rekomendasi menarik. Beberapa istilah di bawah ini baru, jadi masing-masing disertai arti sederhananya:
 
-- **Popularitas timpang.** Sebagian kecil item menarik sebagian besar interaksi (*long tail*), persis seperti di toko sungguhan.
-- **Selera bersifat personal.** Setiap pengguna punya preferensi tersembunyi terhadap kategori, rentang harga, dan merek.
+- **Popularitas timpang.** Sebagian kecil item menarik sebagian besar interaksi, persis seperti di toko sungguhan. Jika item diurutkan dari yang paling populer ke yang paling sepi, Anda mendapat beberapa batang tinggi diikuti ekor yang sangat panjang dan rendah; karena itu disebut **long tail** (ekor panjang). Bahayanya, recommender yang hanya mengulang batang-batang tinggi tidak pernah menunjukkan sisa rak kepada pembeli.
+- **Selera bersifat personal.** Setiap pengguna punya preferensi tersembunyi terhadap kategori, rentang harga, dan merek. Sari mungkin menyukai makanan kucing dan casing ponsel murah; pengguna lain mungkin lebih suka elektronik premium.
 - **Waktu berpengaruh.** Lalu lintas lebih tinggi pada akhir pekan dan sekitar tanggal gajian (tanggal 25 hingga tanggal 1 setiap bulan), dan jendela simulasi memuat **mega-sale 9.9**, hari saat lalu lintas dan pesanan melonjak. Bab 1 mengukur dan membuat grafik efek-efek ini.
-- **Perilaku berbentuk corong.** Pengguna melihat *impression*, sebagian menjadi *click*, lebih sedikit menjadi *add-to-cart*, lebih sedikit lagi menjadi *order*. Beberapa item di-*hide* dan beberapa pembelian di-*return*.
-- **Stok habis dan item baru muncul.** Penjual mendaftarkan produk selama jendela simulasi dan sebagian terjual habis, yang menciptakan masalah *cold start* dan ketersediaan di Bab 12.
+- **Perilaku berbentuk corong.** Setiap tindakan dicatat sebagai *event* (kejadian). Pengguna melihat sebuah item di layar (sebuah **impression**), sebagian impression menjadi **click** (klik), lebih sedikit menjadi **add-to-cart** (item dimasukkan ke keranjang), dan lebih sedikit lagi menjadi **order** (pembelian). Setiap langkah melibatkan lebih sedikit orang daripada langkah sebelumnya, seperti corong yang menyempit. Beberapa item di-*hide* (pengguna menekan "tidak tertarik") dan beberapa pembelian di-*return* (dikembalikan).
+- **Stok habis dan item baru muncul.** Penjual mendaftarkan produk selama jendela simulasi dan sebagian terjual habis. Item yang benar-benar baru dan belum pernah diklik siapa pun sulit direkomendasikan karena belum ada perilaku untuk dipelajari; inilah **masalah cold start**, bersama masalah ketersediaan, di Bab 12.
 
 ### Satu pembagian waktu untuk seluruh buku
 
 Konvensi terpenting dalam buku ini adalah satu titik waktu tetap bernama **cutoff**. Marketplace simulasi mencakup 60 hari. Kita memilih **hari ke-53 sebagai cutoff** dan menerapkan satu aturan di mana-mana:
 
 > Setiap algoritma boleh belajar dari, dan menghitung fitur dari, event yang terjadi **sebelum** cutoff. Algoritma itu lalu dinilai berdasarkan apa yang benar-benar dilakukan pengguna dalam **7 hari setelahnya**.
+
+Bayangkan seorang peramal cuaca. Anda memberinya catatan cuaca sampai 1 Maret dan bertanya, "Bagaimana cuaca 2 sampai 8 Maret?" Anda sebenarnya sudah tahu jawabannya karena ada di catatan Anda, tetapi Anda menyembunyikannya, lalu membandingkan ramalan dengan kenyataan. Perbandingan itulah skornya. *Curang* berarti membiarkan peramal membaca koran 5 Maret lebih dulu. Di marketplace kita, **riwayat** (*history*) adalah catatannya, cutoff adalah "1 Maret", dan **jendela label** (*label window*, hari-hari setelah cutoff) adalah kunci jawaban yang disembunyikan. Aturan yang sama berlaku bagi pembeli kita, Sari: recommender hanya melihat apa yang Sari lakukan sebelum hari ke-53, lalu diperiksa terhadap apa yang ia lakukan pada hari ke-53 sampai 60. Kalau recommender boleh melihat pembelian Sari di hari ke-55 saat belajar, skornya tampak bagus tetapi tidak bermakna.
 
 ```mermaid
 flowchart LR
@@ -146,6 +173,8 @@ flowchart LR
 *Gambar: Pembagian waktu yang dipakai setiap skrip pendamping. Tidak ada data dari jendela label yang pernah terlihat saat pelatihan atau pembangunan fitur.*
 
 Berkas bersama `book/code/common.py` menegakkan pembagian ini dan menyediakan satu fungsi `evaluate`, sehingga angka-angka dapat dibandingkan antarbab.
+
+Anggaplah `evaluate` sebagai kunci jawaban tunggal yang dipakai untuk menilai setiap algoritma. Jika tiap bab memakai skema penilaian sendiri, Anda tidak bisa tahu apakah sebuah gagasan baru memang lebih baik atau hanya dinilai lebih longgar.
 
 ## Bagaimana setiap bab disusun
 
@@ -163,6 +192,8 @@ Bab 1 sampai 14 mengikuti templat yang sama, sehingga Anda selalu tahu posisi An
 ### Konvensi visual dan tipografi
 
 Kode diambil langsung dari berkas repositori, dan blok keluaran disalin dari berkas hasil yang ditangkap. Setiap angka dalam paragraf juga muncul di blok keluaran atau berkas JSON di bawah `book/results/`. Matematika sebaris tampak seperti $a \cdot b$; Bab 2 membangun NDCG dari nol. Angka ditulis dengan titik desimal, sama seperti pada keluaran program.
+
+Tiga skor kualitas muncul mulai Bab 2. Anda belum memerlukannya sekarang, tetapi berikut arti satu kalimat masing-masing agar terasa akrab. **Precision** bertanya: dari item yang kami tampilkan, berapa bagian yang benar-benar diinginkan pengguna? **Recall** bertanya: dari semua item yang benar-benar diinginkan pengguna, berapa bagian yang berhasil kami tampilkan? **NDCG** (*Normalised Discounted Cumulative Gain*) adalah satu skor yang memberi ganjaran bila item yang tepat berada di *puncak* daftar, bukan di dasar. Bab 2 membangun masing-masing dengan contoh kecil.
 
 Empat jenis kotak callout menyela teks. Tampilannya di PDF seperti berikut:
 
