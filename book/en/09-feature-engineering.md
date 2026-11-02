@@ -21,7 +21,6 @@ A ranking model is that shopper, and a feature row is the briefing note. Gradien
 
 There is one more rule for the briefing note, and it is the rule that Dewi violated: **the note must only contain what was knowable at the moment the decision was made**. A personal shopper on Tuesday cannot be told what the customer will buy on Wednesday. In machine learning terms, the feature for a training example must be computed at a cutoff time $T$, using only events with timestamp strictly before $T$, while the label comes from events at or after $T$. We call that property *point-in-time correctness*. A violation is called *leakage*.
 
-An everyday analogy for why leakage is so seductive: imagine a student who prepares for an exam by studying a copy of that exact exam, answers included. Their practice score will be spectacular. Their performance on a fresh exam will be ordinary. Nothing in the practice score warns them, because the practice score measures memory, not skill. A leaky feature gives a model the same false confidence, and a metric that looks the same as a good metric.
 
 ## The algorithm: from raw events to a feature row
 
@@ -34,7 +33,7 @@ $$H_T = \{\, e \in \text{events} : e.\text{ts} < T \,\} \ \cup\ \{\, i \in \text
 The labels come from the future window $[T, T + 7\text{ days})$. The same code is used at training time (with $T$ in the past, so the future is observable and we can label) and at serving time (with $T$ = now, so the future is empty). This symmetry is the single most important design choice in the feature pipeline. If training and serving share one code path, a whole class of bugs known as *training/serving skew* cannot occur.
 
 ```mermaid
-flowchart TD
+flowchart LR
     RAW[("Raw tables<br/>events, items,<br/>users, shops")] --> HAT["History.at(tables, T)"]
     HAT -->|"events with ts < T<br/>+ age_days column"| FEAT["features.build"]
     CAND["Candidates<br/>(Chapter 8)"] --> FEAT
@@ -94,19 +93,6 @@ Cross features are where personalisation happens. Most of the raw predictive pow
 
 A pair that never interacted has no row in the aggregated tables, so the join produces missing values. A missing value can mean two different things: "zero" (no clicks) or "unknown or never" (no previous order, so the number of days since the last order does not exist). The repo makes this choice per feature. Counts become 0. Recency features, where 0 would mean "just now", receive large sentinel values: 9999 hours for "never touched" or 999 days for "never ordered". Trees split on thresholds, so a sentinel far away from real values separates the two cases cleanly.
 
-### A tiny worked example
-
-Let the cutoff be Friday 00:00. Siti has these events on item X:
-
-| Event | Time | age_days |
-|---|---|---|
-| click | Thursday 12:00 | 0.5 |
-| click | Tuesday 00:00 | 3.0 |
-| order | Monday 12:00 | 3.5 |
-| click | Saturday 10:00 (the day after the cutoff) | not in $H_T$ |
-
-Then `ui_clicks = 2`, `ui_orders = 1`, and `ui_hours_since_last` is the minimum age among positive events times 24, which is $0.5 \times 24 = 12$ hours. The Saturday click is invisible to the features. It is, however, exactly what `data.labels` will turn into label 1 for the pair (Siti, X), which is what we want the model to predict.
-
 ::: fact
 **Do top features dominate a ranking model?** In a widely cited study of click prediction at Facebook, the authors boosted trees over hundreds of features and found that the top 10 features were responsible for about half of the total feature importance, while the last 300 features contributed less than 1%. They also found that *historical* features (such as cumulative clicks on an ad) carried considerably more explanatory power than contextual ones: the top 10 features were all historical. Contextual features mattered mostly for cold start.
 
@@ -130,57 +116,20 @@ Walk through it line by line:
 2. `age_days` is computed against the cutoff, never against `now()`.
 3. Searches get the same treatment, because a search query is as much a behavioural signal as a click.
 4. The catalog is filtered with `listed_at <= cutoff`. An item listed next Tuesday does not exist for a model standing on Friday. This is the catalog version of the same rule, and it is why a brand-new product cannot appear in training candidates before its launch.
-5. The stock status deserves a second look. `in_stock` is true when the item has no stock-out time *or* the stock-out happens after the cutoff. The future stock-out time itself is dropped with `drop(columns="out_of_stock_at")`, so the model cannot learn "this item will sell out in two days". The catalog snapshot is the subtlest place for leakage because the table has no timestamp column on most of its fields: price, rating and rating count are shown as they are *now*. In this simulated data they do not change over time, which keeps the lab honest. In a real system, they do change, which is a reason to keep daily snapshots (see the pitfalls section).
+5. `in_stock` is true when the item has no stock-out time *or* the stock-out happens after the cutoff, and the future stock-out time is dropped, so the model cannot learn "this item will sell out in two days". Price, rating and rating count are shown as they are *now*; in this simulated data they never change, which keeps the lab honest. A real catalog changes, which is why production keeps snapshots (see the pitfalls).
 
-The `History` dataclass is frozen and carries the cutoff, events, searches, items, users, shops and categories. Nothing else in the codebase reads the raw `events` table, so a feature function that takes a `History` simply cannot see the future. The companion function that does look into the future is deliberately separate and small:
+The `History` dataclass is frozen and nothing else reads the raw `events` table, so a feature function that takes a `History` cannot see the future. The only code that looks forward is `data.labels`: it selects events in $[T, T+7d)$, maps click / add_to_cart / order to graded labels 1 / 2 / 3 via `schema.LABEL_GAIN`, and keeps the maximum per (user, item).
+### Building blocks
 
-```include
-path: recommender/recsys/data.py
-symbol: labels
-```
-
-It selects events in the window $[T, T + \text{days})$, maps `click / add_to_cart / order` to graded labels 1 / 2 / 3 using `schema.LABEL_GAIN`, and keeps the maximum label per (user, item). If the user ordered *and* clicked, the order wins. This gives the graded relevance that Chapter 10 needs for NDCG-based training.
-
-### Building blocks: counting and smoothing
-
-Two tiny helpers do most of the aggregation work in `features.py`.
-
-```include
-path: recommender/recsys/features.py
-symbol: _count
-```
-
-```include
-path: recommender/recsys/features.py
-symbol: _smoothed
-```
-
-`_count` filters to one event type, optionally to a window using `age_days < max_age`, then groups by an arbitrary key list and counts. The same function serves users (`["user_id"]`), items (`["item_id"]`), and pairs (`["user_id", "item_id"]`). `_smoothed` is exactly the formula of Step 3 on whole columns at once: `num` is the clicks, `den` is the impressions, `prior` is $p_0$ and `strength` is $s$. One line, but used for CTR, conversion rate and return rate.
-
-### User features
-
-```include
-path: recommender/recsys/features.py
-symbol: user_features
-```
-
-The loop at the top builds four counters through the same helper. After the merge, users without events have missing values, which `fillna` turns into zero. The user's CTR is smoothed toward the global CTR with strength 20: a user who has seen five impressions does not get to claim an extreme click rate. `user_days_since_active` takes the smallest age in the user's history (the most recent event), with the 999-day sentinel for users with no events at all. `user_account_age_days` is `cutoff - signup_at`, again measured against the cutoff and not the wall clock.
-
+Two tiny helpers in `features.py` do most of the aggregation. `_count` filters one event type, optionally to a window with `age_days < max_age`, then groups by any key list (user, item, or pair). `_smoothed` is the formula of Step 3 on whole columns: `num` is clicks, `den` impressions, `prior` is $p_0$, `strength` is $s$. User features (`user_features`) use the same helpers: four windowed counters, a CTR smoothed with strength 20, and recency and account age measured against the cutoff, never the wall clock.
 ### Item features
-
-The item function is the longest, so we read it in two stops. First the whole function, then a discussion.
 
 ```include
 path: recommender/recsys/features.py
 symbol: item_features
 ```
 
-The first block of assignments copies *static* catalog attributes into feature columns, with two transformations worth noting. `item_rating_count` is passed through `np.log1p`, because rating counts are heavy-tailed: the difference between 5 and 50 ratings is much more informative than between 5,005 and 5,050. And `item_price_vs_category` divides the price by the category median, so a 50,000 IDR phone case and a 5,000,000 IDR laptop can be compared on the same scale: cheap or premium *for what it is*.
-
-The middle block declares ten counters as a list of `(name, event_type, window)` triples and loops over them. Names that start with an underscore are temporary: they feed the smoothed ratios and are not part of the model (the final `build` selects only registered features). The three smoothed rates use global averages as priors with strengths 50 (CTR), 20 (conversion) and 10 (returns). Strength is lower for rates computed over rarer events, since there is less data to estimate a stable average.
-
-The trend feature is the formula from Step 2. Finally the shop table is joined in, so every item row also carries seller quality: rating, mall status, cancel rate and chat response rate.
-
+The first block of assignments copies static catalog attributes into feature columns. `item_rating_count` goes through `np.log1p` because counts are heavy-tailed (5 versus 50 ratings matters more than 5,005 versus 5,050), and `item_price_vs_category` divides by the category median so a phone case and a laptop are compared on "cheap or premium for what it is". The middle block declares ten counters as `(name, event_type, window)` triples; underscore names are temporary inputs to the smoothed rates (strengths 50 for CTR, 20 for conversion, 10 for returns, lower for rarer events). Then come the trend formula from Step 2 and a join with shop quality.
 ### Cross features
 
 Three functions build the cross features. They look different but share one pattern: *join events to the second key, then group by the pair*.
@@ -192,14 +141,7 @@ symbol: user_item_features
 
 `user_item_features` counts clicks, carts, orders and impressions per pair. `ui_ignored_impressions` is the number of times the pair was shown *only if the user never clicked it*, which is the fatigue signal: an item that was displayed ten times without a click is probably not interesting. `ui_hours_since_last` uses only positive actions (click, cart, order) and converts days to hours. `ui_max_dwell_sec` is the longest product-page stay: a user who spent seven minutes on a product page is telling us more than one who bounced after two seconds.
 
-```include
-path: recommender/recsys/features.py
-symbol: user_category_features
-```
-
-The user × category block works through the item's category. It computes the click *share*, a normalised number between 0 and 1 (`transform("sum")` divides each user's category count by that user's total), so a heavy clicker and a light clicker become comparable. It also uses `hist.searched_categories()` to turn free-text queries into category evidence (a naive substring match in this repo; production systems use a query classifier), and the order count and recency for repurchase cycles. The `outer` merges keep rows that appear in only some of the sources, and `build` later fills the gaps.
-
-The user × shop block is the same pattern with `shop_id`, and `user_price_level` computes the median of `price / category_median_price` across the user's clicks, which is then divided into the item's own `item_price_vs_category` to produce `price_ratio_to_user`. A value of 0.62 means the item costs 62% of what this user typically pays relative to category norms.
+The user × category block computes the click *share* (`transform("sum")` divides by the user's total, making heavy and light clickers comparable), plus searches mapped to categories and order recency. The user × shop block is the same pattern. `user_price_level` is the median of `price / category_median_price` over the user's clicks; dividing the item's own ratio by it gives `price_ratio_to_user`, so 0.62 means the item costs 62% of what this user usually pays relative to category norms.
 
 ### Putting it together: `build`
 
@@ -251,12 +193,6 @@ symbol: test_features_ignore_events_after_cutoff
 
 The test runs in four steps. It builds features at day 30 of the simulation. Then it tampers with the future: *every* event after the cutoff becomes an order of item 0, and every later search becomes a query for "diapers". Then it rebuilds, and `assert_frame_equal` demands that the two frames are identical, cell by cell. If a new feature reads even one future event, the tampered run differs and the test fails. The test is deliberately brutal. A subtle leak, such as using a 30-day window that accidentally extends forward through `abs(age_days)`, would produce a tiny difference in a handful of cells, and it would still be caught.
 
-The sibling test in the same file asserts that no candidate item was listed after the cutoff, which is the catalog version of the guarantee.
-
-::: tip
-Write the tampering test *before* you write the second feature. It takes ten minutes and is the cheapest insurance in the entire pipeline. Tampering with the future (rather than deleting it) is intentional: deleting future rows can hide a leak that only depends on *row counts*, while rewriting them to extreme values makes any dependency loud.
-:::
-
 ## Run it
 
 The companion script `ch09_features.py` builds the frames, prints one complete feature row, compares positives and negatives and then runs the leakage experiment. From the `book/` directory:
@@ -274,28 +210,17 @@ lines: 2-5
 
 About 78,800 training rows and 98,400 evaluation rows come from 781 and 947 users respectively. The positive rate is a little over 1.7%, which is typical: for the vast majority of candidates the user will do nothing in the next week. We will return to this class imbalance in Chapter 10.
 
-Now the main attraction, one candidate row with all 46 features. It is the best heuristic-scored candidate for user 42, printed in four slices so it fits on a page.
+Now one candidate row with all 46 features: the best heuristic-scored candidate for user 42, abbreviated here to the candidate and user groups (the full row is in the results file).
 
 ```output
 file: results/ch09_features.txt
 lines: 7-24
 ```
 
-```output
-file: results/ch09_features.txt
-lines: 25-44
-```
-
-```output
-file: results/ch09_features.txt
-lines: 45-63
-```
-
 ## Results: reading a feature row
 
 Read the row like a detective. The candidate is item 2381, and the briefing note says: the user has interacted with it directly (`cand_recent_score` is 11.63, a large decayed weight), the item was proposed by all four retrievers (`cand_n_sources` = 4) and it is number 1 in the global trending list (`cand_global_pop_rank` = 0). The user is active (45 clicks in 30 days, 14 orders) and was last seen 1.3 days ago. The item is cheap for its category (`item_price_vs_category` = 0.60), has the best possible rating (5.0) with $e^{5.673} - 1 \approx 290$ ratings, and it is popular right now (29 clicks in seven days). The cross features tell the personal story: six clicks, six add-to-carts and five orders on this exact item, and 31% of the user's category clicks land in this category.
 
-On paper this is a perfect candidate, yet its label in the evaluation window is 0. This is not a bug. The user already ordered this item five times; it is a consumable (`item_is_consumable` = 1), so a repurchase is plausible, but the last touch was 59.7 hours before the cutoff, and the user simply did not come back during the next seven days. A ranking model sees thousands of such rows and learns *probabilities*, not certainties. A strong row is a higher chance, never a guarantee. It is also a reminder of why the recommender in this repo applies an already-bought rule in the re-ranking stage (Chapter 11).
 
 ### Do positives look different from negatives?
 
@@ -308,15 +233,7 @@ lines: 65-74
 
 ![Distribution of six features for positives and negatives](../assets/charts/ch09-feature-distributions.png)
 
-The picture and the table tell a consistent story, and each feature plays a different role.
-
-- **`cand_recent_score`** separates the classes sharply. The mean for positives is 0.847 against 0.099 for negatives, about eight times higher. In the histogram (log scale) the red positives dominate everywhere to the right of zero. The user's own recent actions are by far the strongest predictor of the next action, which is a familiar finding.
-- **`uc_click_share_30d`** shows the same personalised pattern: a mean of 0.447 versus 0.245, and a median of 0.462 versus 0.143. Negatives pile up at exactly zero (the user never clicks in that category), while positives are spread across the range.
-- **`item_ctr_30d`** barely separates the classes (0.144 versus 0.141). That does not make it useless: the feature is a quality signal that matters *within* the group of candidates for one user, and a mean over all rows hides this. It does show why one-feature histograms are only a sanity check, not a verdict.
-- **`item_clicks_7d`** is mildly higher for positives (mean 5.893 versus 5.204). Popular items are a bit more likely to get clicks, which echoes the popularity baselines of Chapter 3.
-- **`item_rating_count`** and **`price_ratio_to_user`** are almost identical in the two classes (4.555 vs 4.414 and 1.073 vs 1.118). These are the kind of weak features that a tree model can still use in interaction with others, and the kind that an ablation study (Chapter 10) shows to be nearly neutral.
-
-The lesson for feature engineers is practical. You can usually spot a *strong* feature by eye, but you cannot confirm a weak one by eye, and you should never delete a feature purely from a histogram. Interactions are invisible in one-dimensional plots.
+`cand_recent_score` separates the classes sharply (mean 0.847 for positives versus 0.099; the user's own recent actions are the strongest predictor), and `uc_click_share_30d` does the same in a personalised way (0.447 versus 0.245; negatives pile up at zero). `item_ctr_30d` (0.144 versus 0.141), `item_rating_count` (4.555 versus 4.414) and `price_ratio_to_user` (1.073 versus 1.118) barely differ, and `item_clicks_7d` is only mildly higher (5.893 versus 5.204). Weak-looking features can still help a tree in interaction with others, so never delete a feature purely from a histogram.
 
 ### What a leak looks like
 
@@ -327,7 +244,7 @@ path: book/code/ch09_features.py
 symbol: label_window_clicks
 ```
 
-Notice how innocent it looks. It is an ordinary aggregation with an ordinary `groupby`, and the only unusual element is the time filter `ts >= start`, the opposite of what `History.at` enforces. Then the same LightGBM ranker is trained twice, once with the 46 honest features and once with 47 (the honest ones plus the leak), and both are evaluated on the same evaluation frame.
+It looks innocent: an ordinary `groupby` whose only unusual element is the time filter `ts >= start`, the opposite of what `History.at` enforces. The same LightGBM ranker is trained twice, with the 46 honest features and with 47 (honest plus the leak), and both are evaluated on the same frame.
 
 ```output
 file: results/ch09_features.txt
@@ -338,24 +255,16 @@ lines: 76-84
 
 The numbers are dramatic. NDCG@20 jumps from 0.2116 to 0.5035, a factor of 2.38, and recall@20 from 0.2725 to 0.4645. The leaked column takes 88.5% of all the gain in the model, ranking first of 47 features. Look at the recall columns for the leaky ranker: recall@10, @20 and @50 are all about 0.464, so essentially every positive that is reachable was already found within the first ten positions. A ranker can only reorder the candidates it is given, so the plateau is the candidate recall ceiling we discussed in Chapter 8: the positives beyond it were never proposed by any retriever. A model that has the answers pushes straight up against that ceiling.
 
-The only reason you can tell something is wrong is that the result is too good. A 2.4× improvement from a single column should make you suspicious, not happy. Practical red flags for leakage are:
-
-1. A single feature takes the majority of the gain, and it is a new one.
-2. Offline metrics rise much more than any previous change, with no matching rise in an online test.
-3. Recall saturates at the candidate ceiling at very small $K$.
-4. Feature importance is large for features that sound like descriptions of the outcome (`total_orders`, `was_returned`, anything with `all_time` that is computed over the whole table).
-
+A 2.4× improvement from one column should make you suspicious, not happy. Red flags: a single new feature takes most of the gain; offline metrics jump far more than any earlier change; recall saturates at the candidate ceiling at tiny $K$; or importance concentrates on features that describe the outcome (`total_orders`, anything computed `all_time` over the whole table).
 ## Pitfalls and how it is done in production
 
 **1. Snapshotting slowly changing attributes.** In this repo the catalog is a single table, and price or rating changes would overwrite history. A real system needs *point-in-time joins*: the value that was current at $T$. Feature stores (Chapter 14) record every feature value with an event timestamp and implement an "as-of join" that picks the latest value not after $T$. Without it, the rating of an item at training time includes reviews that were written *because* people bought it after the cutoff. That is the leakage Dewi would have found next.
 
 **2. Label-adjacent aggregates.** "Total orders of this item" over the full table is the classic leak, because it includes the orders you are trying to predict. The same trap hides in rates, in "last purchase date", in any `max` or `min` over an unbounded column. The `age_days < w` filter inside `_count` is the guard: every windowed aggregate is computed over `History` only.
 
-**3. Training/serving skew.** The best defence is one code path, which is why `features.build` is used by training, evaluation and the live gRPC service. Production systems that compute features in a batch pipeline for training and in an online service for serving need parity tests that run both on the same inputs. Anything computed differently, such as a different rounding, a different time zone, or a different handling of missing values, silently degrades the model.
+**3. Training/serving skew.** The best defence is one code path: `features.build` serves training, evaluation and the live gRPC service. Systems with separate batch and online pipelines need parity tests that run both on the same inputs, because a different rounding, time zone or missing-value rule silently degrades the model.
 
-**4. Choosing sentinels.** Sentinels such as 9999 are safe for trees but poisonous for linear models and neural networks, which would treat 9999 as a huge number. When you move to a neural ranker (Chapter 14), add an explicit "is missing" flag and scale or bucket the values.
-
-**5. Feature creep.** Every feature is a dependency: its source table can change, and its computation costs milliseconds at serving. It is tempting to add every idea. The more disciplined approach is to add a group, run an ablation (Chapter 10), and remove groups that do not help. The next fact box explains why this housekeeping matters.
+**5. Feature creep.** Every feature is a dependency that costs serving time and can break when its source changes. Add a group, run an ablation (Chapter 10), and remove groups that do not help.
 
 ::: fact
 **Data dependencies are technical debt.** In "Hidden Technical Debt in Machine Learning Systems", Sculley and colleagues describe *unstable* and *underutilized* data dependencies: input signals that change behaviour over time, or that provide little incremental modelling benefit yet make the system vulnerable to upstream changes. They recommend detecting underutilized dependencies with regular, exhaustive leave-one-feature-out evaluations, which is exactly the group ablation we run in Chapter 10.
@@ -363,17 +272,7 @@ The only reason you can tell something is wrong is that the result is too good. 
 Source: Sculley et al., NeurIPS, 2015
 :::
 
-**6. Cost at serving time.** The code in this chapter recomputes every feature table from scratch on each `Recommend` request, which is why a request takes roughly a second rather than milliseconds (the measurement is in Chapter 13). Production systems precompute the heavy parts: item-level statistics are refreshed every few minutes by a streaming job, user-level features live in a key-value store, and only cheap pair features (`same_city`, `price_ratio_to_user`) are computed at request time. The *definitions* stay identical.
-
-**7. Privacy and fairness.** Features such as `user_age_bucket` and `user_device_tier` can encode protected attributes or proxies for income. Review a feature list the way you review an API: ask what could go wrong if it is used for ranking, and whether the business actually needs it.
-
-::: warning
-Never report an offline metric without being able to say, for each feature, "at cutoff $T$, this value was already knowable". If you cannot say it for every column, you do not yet know what your metric measures.
-:::
-
-::: try
-Open `recommender/recsys/features.py` and change `user_ctr_30d` so that it counts clicks with `age_days < 30` but impressions with *no* window. Run `uv run pytest recommender/tests/test_point_in_time.py`; it will still pass, because the change does not read the future. Then explain in one sentence why the test passes and why the feature is nevertheless wrong. This shows the limits of the leakage test: it guards against the future, not against bad definitions.
-:::
+**6. Cost at serving time.** This chapter's code recomputes every feature table on each `Recommend` request, which is why a request takes roughly a second (measured in Chapter 13). Production precomputes the heavy parts (item statistics by a streaming job, user features in a key-value store) and computes only cheap pair features such as `same_city` at request time. The *definitions* stay identical.
 
 ## Summary
 
