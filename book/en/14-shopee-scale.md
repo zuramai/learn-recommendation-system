@@ -20,7 +20,7 @@ This final chapter is a map. We will not build a Kafka cluster or train a transf
 
 Imagine a night-market stall that sells fried bananas. The owner knows every regular. She sees who walks up, remembers last week's order, adjusts the sugar when the weather turns, and decides on the spot what to recommend. That is our prototype. Everything fits in one head, which is the single Postgres database and the single Python process. The owner can try a new idea at lunch and know by dinner whether it worked.
 
-Now imagine a national supermarket chain. The same idea, knowing the customer and offering the right thing, is still the goal, but nobody can hold it in their head. Hundreds of shops report sales to a central warehouse through a stream of messages. A team of data engineers maintains a shared catalogue of customer facts so that the shop-floor tablet and the monthly report use the same definition of "loyal customer". Several teams run promotions at once and the finance department insists that experiments are measured properly before a promotion goes national. Someone watches dashboards at night. The chain did not need a smarter owner. It needed *infrastructure for agreeing on facts, moving them quickly, and measuring change*.
+Now imagine a national supermarket chain: hundreds of shops report sales through a stream of messages, a data team maintains one shared definition of "loyal customer", several teams run promotions, and finance insists that experiments are measured before a promotion goes national. The chain did not need a smarter owner. It needed *infrastructure for agreeing on facts, moving them quickly, and measuring change*.
 
 That is the whole difference between our repository and a production marketplace. The ideas (candidates, features, ranking, re-ranking) survive intact. What multiplies is the plumbing around them. In the rest of the chapter we will keep asking the same three questions of every new component:
 
@@ -83,7 +83,7 @@ $$
 
 Here $s_u$ is the state of user $u$, $e$ is a new event, $f$ updates the state, and $g$ turns the state into a feature value $x_u$. A decayed score such as the exponential decay of Chapter 3 is particularly pleasant in this form, because it can be updated in constant time: $s \leftarrow s \cdot 2^{-\Delta t / h} + w$, where $h$ is the half-life and $w$ the event weight.
 
-Streaming brings its own subtleties. Events arrive late and out of order, so you need *event-time* windows and *watermarks* that say "I will wait this long for stragglers". Operators must be restarted without double counting, which is why systems offer checkpoints and exactly-once semantics. And the more you move to streaming, the more you risk computing the same feature two different ways, once in Flink for serving and once in batch for training. That is the next problem.
+Streaming adds subtleties: late, out-of-order events need event-time windows and watermarks, restarts must not double count, and computing a feature once in Flink and once in batch invites the skew discussed next.
 
 ### Feature stores and training/serving skew
 
@@ -110,7 +110,7 @@ That does not fit comfortably on one machine, and scanning it per request is hop
 
 First, **shard** the index. Each shard holds a slice of the catalogue, and a query fans out to all shards, which each return their local top results to be merged. Second, **compress** the vectors. *Product quantisation* splits a vector into sub-vectors and replaces each by the id of its nearest codeword. A 256-byte vector might become 16 bytes, shrinking the same index to $10^9 \times 16 = 16$ GB. Third, use a **graph or clustered index** (HNSW, IVF-PQ, or Google's ScaNN) so that each query touches only a tiny fraction of the vectors. The trade-off is exactly the one in the Chapter 7 table, where probing 4 of 32 clusters kept recall@20 at 0.975 of brute force while scanning 12.5% of the items. At scale you tune the same dial, only with a tighter latency target and a much larger catalogue.
 
-Two operational facts deserve a mention. Indexes are rebuilt, not edited: a new item may be searchable only after the next build, or after being inserted into a small "fresh" side index that is merged at query time. And the item tower must be re-run for the whole catalogue whenever the model changes, so the model version and the index version have to be deployed as a pair, otherwise the query vectors and item vectors live in different spaces.
+Indexes are rebuilt, not edited, and the item tower must be re-run for the whole catalogue whenever the model changes, so model and index versions deploy as a pair.
 
 ::: fact
 **Graph embeddings at web scale.** Pinterest's PinSage combined random walks with graph convolutions to learn embeddings of pins. It was trained on a graph with 3 billion nodes (pins and boards) and 18 billion edges, which its authors described as the largest application of deep graph embeddings to date at the time of publication.
@@ -210,13 +210,7 @@ $$
 z = \frac{\hat{p}_T - \hat{p}_C}{\text{SE}} = \frac{0.0024}{0.001222} \approx 1.965
 $$
 
-For a two-sided test, the p-value is $2\,(1 - \Phi(1.965)) \approx 0.0494$, where $\Phi$ is the standard normal CDF. At the conventional $\alpha = 0.05$ this just clears the threshold. A 95% confidence interval for the difference uses the unpooled standard error, about 0.001222 as well at these rates:
-
-$$
-0.0024 \pm 1.96 \times 0.001222 \approx [\,0.000006,\ 0.004794\,]
-$$
-
-The interval barely excludes zero: the true lift could be anywhere from essentially nothing to 6% relative. That is the honest reading of the result. "Significant" here means "we cannot comfortably rule out zero", not "the lift is 3%". If you had peeked at the dashboard daily and stopped the first time $p < 0.05$, your real false-positive rate would be far higher than 5%. The significance level assumes a single, pre-planned look.
+For a two-sided test, the p-value is $2\,(1 - \Phi(1.965)) \approx 0.0494$, where $\Phi$ is the standard normal CDF. At the conventional $\alpha = 0.05$ this just clears the threshold. The 95% confidence interval for the difference (using the unpooled standard error, also about 0.001222) is roughly $[0.000006,\ 0.004794]$: it barely excludes zero, so the true lift could be anywhere from essentially nothing to 6% relative. That is the honest reading. "Significant" here means "we cannot comfortably rule out zero", not "the lift is 3%". If you had peeked at the dashboard daily and stopped the first time $p < 0.05$, your real false-positive rate would be far higher than 5%. The significance level assumes a single, pre-planned look.
 
 How many users would we have needed? For a target absolute effect $\delta$ at significance $\alpha$ and power $1 - \beta$, the per-variant sample size is approximately
 
@@ -230,94 +224,26 @@ $$
 n \approx \frac{2 \times (2.8016)^2 \times 0.08 \times 0.92}{0.0024^2} = \frac{2 \times 7.849 \times 0.0736}{0.00000576} \approx 200{,}600
 $$
 
-So about 200,600 users per variant, roughly twice what we ran. Our hypothetical test was *underpowered* for a 3% relative lift, which is why it landed on the boundary. Because the required $n$ grows with $1/\delta^2$, halving the effect you want to detect quadruples the traffic you need. This is why large companies obsess over variance-reduction techniques, and why testing many small tweaks at once requires care. If you check five metrics at $\alpha = 0.05$ each, the chance that at least one is "significant" by luck alone is $1 - 0.95^5 \approx 23\%$. Pre-declare one primary metric, or correct for multiple comparisons.
-
-```mermaid
-flowchart TD
-    A[Offline: beats the leaderboard baseline?] -->|no| X[Iterate offline]
-    A -->|yes| B[Replay / shadow traffic: latency and errors OK?]
-    B -->|no| X
-    B -->|yes| C[1% A/B ramp: guardrails and sample ratio OK?]
-    C -->|no| X
-    C -->|yes| D[Full-power A/B test, pre-registered metric]
-    D -->|primary up, guardrails flat| E[Ramp to 100%]
-    D -->|otherwise| X
-    E --> F[Keep a holdout and monitor drift]
-```
-
-*Figure: The launch funnel. Each gate is cheaper than the next, and failing any gate returns to offline iteration.*
+So about 200,600 users per variant, roughly twice what we ran. Our hypothetical test was *underpowered* for a 3% relative lift, which is why it landed on the boundary. Because the required $n$ grows with $1/\delta^2$, halving the effect you want to detect quadruples the traffic you need. This is why large companies obsess over variance-reduction techniques, and why testing many small tweaks at once requires care.
 
 ### Monitoring and drift
 
 A deployed recommender can fail silently. The service keeps returning 200 OK with twenty perfectly formatted items, while quality decays. The usual causes are:
 
-- **Data drift.** The input distribution changes: a new app version stops sending `dwell_sec`, so the feature is suddenly missing for everyone, or a sale moves the price distribution.
-- **Concept drift.** The relationship between features and outcome changes. After a holiday, people stop buying what they bought the week before.
-- **Feedback loops.** The model only learns about items it showed (Chapter 12), so its own exposure shapes the data it will be retrained on.
-- **Pipeline breakage.** A late stream, a stale feature store entry, or an ANN index that did not rebuild.
+- **Data drift:** inputs change, for example a new app version stops sending `dwell_sec`.
+- **Concept drift:** the feature-outcome relationship changes after a holiday.
+- **Feedback loops:** the model only learns about items it showed (Chapter 12).
+- **Pipeline breakage:** a late stream, a stale feature, an index that did not rebuild.
 
 Each has a monitor. For data drift, compare the distribution of each feature in the last hour against the training distribution with a simple statistic such as the *population stability index* or a Kolmogorov–Smirnov test, and alert when the share of missing values changes. For the model, watch the distribution of predicted scores, because a sudden shift is a cheap proxy for broken inputs. For outcomes, track online CTR and conversion by position and by user activity bucket, as Chapter 12 did offline, and compare against a small **holdout**: a few percent of users who always receive a simple baseline. The holdout is your honest ruler, because it tells you whether the whole recommender is still beating popularity, which our leaderboard says is a 4x gap at least (pop_7d scores 0.048, the ranker 0.215). Finally, monitor *freshness* itself: the age of the newest event visible to the ranker, and the age of the index. In this repository, the equivalent of a freshness alert would be comparing `max(ts)` in the `events` table with the latest event seen by `Store.refresh`.
 
 ### Latency budgets
 
-A recommendation request is a chain of calls. If the whole page must render in, say, 300 ms at the 99th percentile, each stage gets a slice, and the slices add up. A typical, **hypothetical** budget for a multi-stage system:
-
-|Stage|Budget (ms, p99)|
-|---|---|
-|Gateway, auth, request parsing|10|
-|Fetch online user features|15|
-|Retrieval (ANN + rules, in parallel)|40|
-|Feature assembly for ~500 candidates|40|
-|Deep ranker forward pass (batched)|80|
-|Re-ranking and business rules|10|
-|Hydration (titles, prices, stock)|30|
-|Network and serialisation|40|
-|**Total**|**265**|
-
-Three principles make budgets work. First, **tails dominate**. A page that calls ten services in parallel is as slow as the slowest, so the p99 of each service matters far more than its median. Our own latency result shows the pattern at small scale: the server p50 is 839.9 ms, but the p99 is 985.0 ms and the maximum 1010.6 ms. Second, **degrade rather than fail**: every stage needs a deadline and a cheaper fallback, which is the exact reason `GET /api/recommendations` in this repo returns a popularity list with `fallback: true` after a 5 second timeout. Third, **cache what is shared**: item-level statistics change slowly and can be computed once for all users, leaving only per-user work on the hot path.
+A request is a chain of calls, so a page budget (say 300 ms at p99) is sliced across stages: gateway and auth, user-feature fetch, retrieval, feature assembly, ranking, re-ranking, hydration and network. Three principles make budgets work. First, **tails dominate**: a page that fans out to ten services is as slow as the slowest, so p99 matters more than the median. Our own result shows it at small scale: server p50 839.9 ms, p99 985.0 ms, maximum 1010.6 ms. Second, **degrade rather than fail**: every stage needs a deadline and a cheaper fallback, which is why `GET /api/recommendations` returns a popularity list with `fallback: true` after a 5 second timeout. Third, **cache what is shared**: item-level statistics change slowly and can be computed once for all users.
 
 ## Code walkthrough: pseudo-code for the missing pieces
 
-There is no included repository code in this chapter, because none of these components exist in the repository yet. Instead, here are sketches of how they would look. The point is to see that each is small once the idea is clear. The first sketch is the streaming feature job from the discussion above.
-
-```python
-# Pseudo-code: a Flink-style keyed operator for user_clicks_30d.
-# State per user: a ring of (day, count) buckets covering 30 days.
-def on_event(user_id, event, state, online_store):
-    if event.type != "click":
-        return
-    bucket = event.ts.date()
-    state.counts[bucket] += 1                  # add the new click
-    for day in list(state.counts):
-        if day < bucket - 30 days:             # drop what left the window
-            del state.counts[day]
-    online_store.put(
-        key=f"user:{user_id}",
-        field="user_clicks_30d",
-        value=sum(state.counts.values()),
-        as_of=event.ts,                        # kept for the offline table too
-    )
-```
-
-The operator touches one user's state and does constant work per event, so it scales by adding partitions. Notice the `as_of` timestamp. The same write is appended to an offline table, which is how the as-of join for training gets its history. Next, the serving path: a ranker that reads features, scores several tasks, and logs everything it used.
-
-```python
-# Pseudo-code: serving with a multi-task ranker and an exposure log.
-def recommend(user_id, k, ctx):
-    uvec  = online_store.get(f"user:{user_id}")            # fresh, ~ms
-    cands = ann.search(user_tower(uvec), top=500) \
-            + rules.recent_and_covisit(user_id)            # union of retrievers
-    cands = filters.hard(cands, user_id)                   # hidden, out of stock
-    feats = assemble(cands, uvec, item_store.batch_get(cands))
-    p     = ranker.predict(feats)    # dict of arrays: click, cart, order
-    s     = final_score(p, cands)    # business blend, see below
-    out   = rerank(cands, s, caps={"category": 8, "shop": 4}, k=k)
-    exposure_log.append(request_id=ctx.id, model=ranker.version,
-                        items=out, features=feats[out], scores=s[out])
-    return out
-```
-
-Compare this with `RecommenderService.Recommend`: the shape is identical. What is new is the user-tower call that replaces one of the four retrievers, the batch lookup from a feature store instead of a pandas frame, the multi-task output, and the final line, the exposure log that closes the loop. Third, the business blend that was written as a formula in the multi-objective section:
+There is no included repository code here, because none of these components exist in the repository yet. The sketch below is pseudo-code: the business blend from the multi-objective section. Compare the serving flow with `RecommenderService.Recommend`: it has the same shape, plus a user-tower retriever, batch feature-store lookups, several task heads and an exposure log written at the end.
 
 ```python
 # Pseudo-code: blending task heads into one score.
@@ -328,22 +254,7 @@ def final_score(p, cands, w=(1.0, 2.0, 3.0), ads_weight=0.0):
     return base * (1.0 + boost) + ads
 ```
 
-The weights `(1.0, 2.0, 3.0)` echo the label scheme of this book (click 1, cart 2, order 3) but are now *explicit and tunable*. Finally, a monitor for data drift, using the population stability index over ten bins:
-
-```python
-# Pseudo-code: PSI between the training and the live distribution of one feature.
-def psi(train_values, live_values, bins=10):
-    edges = np.quantile(train_values, np.linspace(0, 1, bins + 1))
-    a = np.histogram(train_values, edges)[0] / len(train_values)
-    b = np.histogram(live_values,  edges)[0] / len(live_values)
-    a, b = np.clip(a, 1e-6, None), np.clip(b, 1e-6, None)
-    return float(np.sum((b - a) * np.log(b / a)))
-# Rule of thumb: < 0.1 stable, 0.1-0.25 investigate, > 0.25 alert.
-```
-
-Run this for each of the 46 features per hour and you have a cheap early warning system. The rule-of-thumb thresholds are folklore from credit scoring, not laws, so calibrate them against your own history.
-
-## Run it: the book's leaderboard
+The weights `(1.0, 2.0, 3.0)` echo the label scheme of this book (click 1, cart 2, order 3) but are now *explicit and tunable*. ## Run it: the book's leaderboard
 
 The chapter's figure aggregates every method evaluated in this book on the same simulated users, the same labels and the same 7-day evaluation window. Regenerate it, and the headline comparison it summarises, with:
 
@@ -377,21 +288,13 @@ Two cautions apply to every conclusion drawn from this chart. First, the data is
 
 ![The model page of the running app: the version, the evaluation metrics of the most recently trained ranker and the features it relies on most.](../assets/screenshots/how-it-works-model.png)
 
-The screenshot above is the same information in the running application. It is the "The model" panel of `/how-it-works`, showing the freshly trained model's version, the number of events loaded and the top features by gain share. At production scale this page becomes a model registry and an evaluation dashboard with history across versions, so that "was last night's retrain better or worse?" is a query, not a guess.
+The screenshot above is the "The model" panel of `/how-it-works`: the model version, events loaded and top features by gain share. At scale it becomes a model registry with history across versions.
 
 ## Pitfalls and how it is done in production
 
-**Adding scale before you need it.** The most common mistake at mid-size companies is copying a big-company architecture for a small-company problem. Kafka, Flink and a feature store each add operational burden, an on-call rotation and a new class of outage. If your daily event volume fits in one database and your model retrains in minutes, the prototype's design is the right one. The signal to migrate is a concrete bottleneck: write contention, a retrain that no longer fits in its window, or freshness requirements the poller cannot meet.
+**Adding scale before you need it.** Copying a big-company architecture for a small problem adds operational burden and new outages. If your events fit in one database and the model retrains in minutes, the prototype design is right; migrate on a concrete bottleneck.
 
-**Optimising an offline metric forever.** Offline gains shrink as you tune. The next improvement often comes from changing the *objective* (adding the order head, adding diversity, protecting new sellers) rather than from a better optimiser. Those changes cannot be judged offline at all.
-
-**Deep models without a strong baseline.** A neural ranker costs more to train, to serve and to debug. Keep the boosted-tree ranker alive as a benchmark and a fallback. If the deep model does not beat it online by a margin that justifies the cost, ship the tree.
-
-**Ignoring the cold path.** New items and new users matter more at a marketplace than at a movie site, because sellers list products every minute. Every upgrade in this chapter, such as streaming features, deep models and index rebuilds, adds delay between "the item exists" and "the system knows about it". Measure time-to-first-impression for new listings explicitly.
-
-**Experiment hygiene.** Peeking, underpowered tests, a changed definition of the metric mid-test, and interference between simultaneous experiments (two tests changing the same page) are the usual sources of false wins. A mature platform enforces a single primary metric, a pre-computed sample size, a sample-ratio check and a holdout.
-
-**Treating ranking as separate from product.** At scale, recommendation quality is capped by catalogue quality, price competitiveness, delivery promises and trust. A perfect ranker cannot sell stock that is not there.
+**Deep models without a strong baseline.** Keep the boosted-tree ranker as benchmark and fallback; ship the deep model only if it wins online by enough to justify its cost.
 
 ### What to build next in this repository
 
@@ -402,16 +305,12 @@ If you want to carry this project forward, here is a prioritised checklist. Each
 3. **Add a holdout and a mini A/B framework.** Hash `user_id` into buckets; send 5% to the popularity fallback; log the bucket on every event; build a page that applies the z-test from this chapter to order conversion.
 4. **Split the label into heads.** Train separate click, cart and order models (three LightGBM models are enough), expose the blend weights in configuration, and compare against the single graded label.
 5. **Replace the poller with a queue.** Have Rust publish events to a broker, and have `Store` consume from it. Keep Postgres as the system of record. This is the smallest honest step towards the streaming architecture.
-6. **Add a drift monitor.** Implement the PSI check for the top 15 features by importance and surface it on the `/how-it-works` page.
+6. **Add a drift monitor.** Implement a drift check (for example the population stability index) for the top 15 features by importance and surface it on the `/how-it-works` page.
 7. **Add the two-tower retriever as a fifth source.** Use the item index from Chapter 7 with the logQ correction, and check with the Chapter 8 script that it raises union recall before you pay for it in latency.
 8. **Protect new sellers.** Add an exposure floor for shops listed in the last 7 days and measure its cost in ndcg, as Chapter 11 did for diversity.
 
 ::: tip
 Do the checklist in order. Items 1 to 3 give you the *measurement* machinery (speed, logs, experiments). Without them you cannot tell whether items 4 to 8 helped.
-:::
-
-::: warning
-A feature store, a stream processor or a deep ranker does not repair a leaky label or a biased evaluation. If the Chapter 9 point-in-time test fails, fix that first. Scale multiplies mistakes as faithfully as it multiplies successes.
 :::
 
 ::: fact
