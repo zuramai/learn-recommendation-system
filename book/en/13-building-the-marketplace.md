@@ -249,6 +249,11 @@ The module-level `retrain` function is shared by the service and the CLI (`uv ru
 
 ```
 
+```include
+path: recommender/recsys/service.py
+symbol: RecommenderService.retrain
+```
+
 `RecommenderService.retrain` wraps the function with two safeguards. First, `retrain_lock.acquire(blocking=False)`: if a retrain is already running, a second request fails immediately with `RuntimeError`, which the RPC maps to `ABORTED` and Rust maps to HTTP `409 retrain already running`. Two simultaneous retrains would waste minutes of CPU and race to write the same files. Second, the swap `self.model, self.meta = model, meta` is two reference assignments. In-flight `Recommend` calls hold their own reference to the old booster (recall the first line of the RPC), so they finish with a consistent model/version pair, and new calls see the new one. No lock on the read path, no pause in traffic.
 
 ::: fact
@@ -272,14 +277,34 @@ The handler reads the user from the cookie, if any (`MaybeUser`), clamps `k`, an
 
 This is the standard contract of a recommender in production: *degraded is better than down*. The route never returns a 5xx just because the model service is unavailable.
 
-### Hydration, fallback and checkout
+### Hydration
 
-gRPC returns ids and scores; the browser needs titles and prices. `hydrate` (in `backend/src/recommender.rs`) runs one SQL query with `id = ANY($1)`, builds a map from id to card, then walks the recommender's list *in the recommender's order*, skipping ids that vanished in the meantime (a seller deactivated a listing a second ago). The response may therefore hold fewer than `k` cards, which is better than failing the whole feed.
+gRPC returns ids and scores; the browser needs titles and prices.
 
-The `fallback` function is the printed card from our restaurant: active, in-stock items ordered by `order` events in the last seven days, then by rating count. It reuses the catalogue's card SQL and labels every row `source: "trending"`, score 0, no contributions, so the frontend needs no separate rendering path. It is deliberately non-personalised: a degraded experience that is the same for everybody cannot be wrong in a surprising, user-specific way.
+```include
+path: backend/src/recommender.rs
+region: hydrate
+```
 
-The checkout handler (`backend/src/cart.rs`) is the best example of why a single writer pays off. In one transaction it loads the cart, locks the item rows with `SELECT ... FOR UPDATE ORDER BY id` (a deterministic order prevents deadlocks), rejects inactive or short-stock lines with `409`, groups lines by shop into one order per seller, stores `unit_price` at the final discounted price, decrements stock and stamps `out_of_stock_at` at zero, writes one `order` event per line through `touch_session`, and empties the cart. Two recommender-relevant consequences: the next `Recommend` stops proposing a sold-out product because `History.at` reads `out_of_stock_at`, and every `order` event corresponds to a real, paid order row.
+One SQL query with `id = ANY($1)` builds a map from id to card; the code then walks the recommender's list *in the recommender's order*, skipping ids that vanished in the meantime (a seller deactivated a listing a second ago). The response may hold fewer than `k` cards, which is better than failing the whole feed.
 
+### The fallback
+
+```include
+path: backend/src/recommender.rs
+region: fallback
+```
+
+This is the printed card from our restaurant: active, in-stock items ordered by `order` events in the last seven days, then by rating count. It reuses the catalogue's card SQL and labels every row `source: "trending"`, score 0, no contributions, so the frontend needs no separate rendering path. It is deliberately non-personalised: a degraded experience that is the same for everybody cannot be wrong in a surprising, user-specific way.
+
+### Checkout: the strongest signal
+
+```include
+path: backend/src/cart.rs
+region: checkout
+```
+
+This is the best example of why a single writer pays off. In one transaction the handler loads the cart, locks the item rows with `SELECT ... FOR UPDATE ORDER BY id` (a deterministic order prevents deadlocks), rejects inactive or short-stock lines with `409`, groups lines by shop into one order per seller, stores `unit_price` at the final discounted price, decrements stock and stamps `out_of_stock_at` at zero, writes one `order` event per line through `touch_session`, and empties the cart. Two recommender-relevant consequences: the next `Recommend` stops proposing a sold-out product because `History.at` reads `out_of_stock_at`, and every `order` event corresponds to a real, paid order row.
 
 ## The contract between languages: one `.proto`, two code generators
 
@@ -340,6 +365,18 @@ file: results/ch13_latency.txt
 
 The first table reports two views of the same calls. "server latency_ms" is the number the service measured about itself, from the start of the RPC to just before the response was built. "client wall ms" is what the Python client measured around the whole call, including serialisation and the loopback network hop. The two differ by only about a millisecond, which tells us that the network and protobuf cost on a local machine are negligible: essentially all the time is inside the recommender. The last two lines show that every request scored between 30 and 129 candidates, 102 on average, and returned exactly 20 items.
 
+Where do 840 ms go? The second script, `ch13_profile.py`, runs offline on the simulated data through the very same `pipeline.recommend` path, timing each stage for three users with very different histories (median of 7 runs). It needs no running services:
+
+```bash
+cd book && uv run python tools/run_all.py --only ch13_profile
+```
+
+```output
+file: results/ch13_profile.txt
+```
+
+Read the per-user table first: totals of 757 to 804 ms, in line with the live service, for users with 4, 22 and 133 interactions. `History.at` costs about 14 ms, `generate` about 234 to 254 ms and `features` about 490 to 544 ms, while `score`, `rerank` and `shap` together are a handful of milliseconds. The second block shows why the user hardly matters: `covisitation_matrix` (26 ms) and `item_features` (139 ms) are computed over the whole catalogue on every request, and the work around them (aggregations over all events) is of the same kind. The model is the cheap part.
+
 ## Results
 
 ### Latency
@@ -348,7 +385,7 @@ The first table reports two views of the same calls. "server latency_ms" is the 
 
 The histogram shows a compact body between about 770 and 900 ms, and a short tail reaching about 1,010 ms. The median is 839.9 ms, the 90th percentile 892.5 ms and the 99th 985.0 ms. Two observations matter.
 
-First, **latency barely depends on the user**. A user with 30 candidates and a user with 129 candidates sit in the same band. That is a strong hint that most of the 840 ms is a fixed cost paid on every request rather than work proportional to the candidates, and the code path is consistent with that: `pipeline.recommend` calls `History.at(tables, now)`, which rebuilds the point-in-time history over the whole event table, and `features.build` computes item-level statistics before it looks at any one user. The exercise at the end of the chapter lets you probe this. [INFERENCE: we did not profile the request; the flat distribution and the code path point to this cause but do not prove it.]
+First, **latency barely depends on the user**. A user with 30 candidates and a user with 129 candidates sit in the same band. The stage profile in "Run it" explains why: it times each stage of `pipeline.recommend` for a light, a median and a heavy user on the simulated catalogue, and `generate` plus `features.build` account for 97% of the request on average, with candidate counts of 95 to 112 whatever the user's history. Inside them sit the catalogue-wide computations (`covisitation_matrix` and `item_features`) that are recomputed on every call, independent of who is asking. Scoring, re-ranking and SHAP together take roughly ten milliseconds.
 
 Second, **0.84 s is fine for a demo and too slow for a real home page**. The Rust route allows 5 s, so even the slowest observed call of 1,010.6 ms uses about a fifth of the budget, but a shopper waiting nearly a second for a feed will notice. The remedy was already planned: cache the item-level frames (the co-visitation matrix and item features) with a short TTL such as 30 seconds and recompute only the user-specific parts per request, accepting that item-level statistics may lag by up to that TTL while the shopper's *own* clicks remain live. We leave it as an optimisation exercise because it shows an important truth about recommender latency: the budget is eaten by feature computation, not by the model. Scoring a hundred rows with a gradient-boosted tree takes milliseconds.
 
@@ -419,7 +456,7 @@ The screenshots below come from the running application, captured with Playwrigh
 - A single `.proto` file is the contract; Rust generates a client in `build.rs`, Python generates stubs with `recsys gen-proto`, and responses carry the model version, candidate count and latency for observability.
 - Retraining is periodic and on demand, guarded by a non-blocking lock and hot-swapped by assigning two references, so serving never pauses.
 - The Rust API hydrates ids into cards in the recommender's order and falls back to a non-personalised trending query on error or timeout, so a recommender outage degrades the page instead of breaking it.
-- Measured on this machine, `Recommend` takes about 840 ms at the median and 985 ms at the 99th percentile, almost independent of the user; the cost is fixed per-request feature work, which a short-TTL cache would attack first.
+- Measured on this machine, `Recommend` takes about 840 ms at the median and 985 ms at the 99th percentile, almost independent of the user. A stage profile attributes 97% of it to candidate generation and feature building, whose catalogue-wide frames a short-TTL cache would attack first.
 
 ## Quiz
 
