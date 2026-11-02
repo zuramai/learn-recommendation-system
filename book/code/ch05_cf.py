@@ -59,17 +59,21 @@ def main() -> None:
 
     # --- user-kNN
     common.section("User-kNN (cosine, neighbours k)")
+    # book:start user_knn_sim
     Rn = row_normalise(R)
     sim_users = row_normalise(R_eval) @ Rn.T  # eval users x all users
+    # book:end user_knn_sim
     for j, uid in enumerate(users):
         if user_rows[j] >= 0:
             sim_users[j, user_rows[j]] = 0.0  # a user is not their own neighbour
     sweep = {}
     for k in (10, 25, 50, 100):
+        # book:start user_knn_topk
         idx = np.argpartition(-sim_users, k, axis=1)[:, :k]
         w = np.zeros_like(sim_users)
         np.put_along_axis(w, idx, np.take_along_axis(sim_users, idx, axis=1), axis=1)
         scores = to_avail(w @ R)
+        # book:end user_knn_topk
         recs, _ = dense_recs.scores_to_recs(scores, users, avail)
         sweep[k] = common.evaluate(recs, f"user_knn_k{k}")
         print(f"k={k:<4d} ndcg@20 {sweep[k]['ndcg@20']:.4f}  recall@20 {sweep[k]['recall@20']:.4f}")
@@ -82,12 +86,16 @@ def main() -> None:
 
     # --- item-kNN
     common.section("Item-kNN (cosine between item columns)")
+    # book:start item_knn_sim
     Cn = row_normalise(R.T)  # items x users, unit rows
     S = Cn @ Cn.T
     np.fill_diagonal(S, 0.0)
+    # book:end item_knn_sim
     print(f"item-item similarity: {S.shape[0]} x {S.shape[1]}, "
           f"mean non-zero similarity {S[S > 0].mean():.4f}, max {S.max():.3f}")
+    # book:start item_knn_score
     scores = to_avail(R_eval @ S)  # score(u, i) = sum_j sim(i, j) * weight(u, j)
+    # book:end item_knn_score
     run("item_knn", scores)
     j0 = int(np.flatnonzero(user_rows >= 0)[0])
     items = hist.items.set_index("item_id")
