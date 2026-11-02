@@ -1,0 +1,24 @@
+[project]
+name = "recsys-book"
+version = "0.1.0"
+description = "Recommender Systems: From Scratch to Shopee Scale — companion code and PDF build"
+requires-python = ">=3.11"
+dependencies = [
+    "markdown-it-py>=3",
+    "mdit-py-plugins>=0.4",
+    "pygments>=2.18",
+    "playwright>=1.48",
+    "matplotlib>=3.9",
+    "scikit-learn>=1.5",
+    "torch>=2.4",
+    "pypdf>=5",
+    "pypdfium2>=4",
+    "grpcio>=1.66",
+    "recsys-prototype",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+recsys-prototype = { path = "../recommender", editable = true }

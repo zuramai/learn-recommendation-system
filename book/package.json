@@ -1,0 +1,9 @@
+{
+  "name": "recsys-book",
+  "private": true,
+  "description": "Browser-side renderers for the book PDF build",
+  "dependencies": {
+    "katex": "^0.16.11",
+    "mermaid": "^11.4.0"
+  }
+}
