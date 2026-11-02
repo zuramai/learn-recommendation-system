@@ -1,0 +1,359 @@
+{
+  "n_features": 46,
+  "train_rows": 78793,
+  "eval_rows": 98428,
+  "positive_rate": 0.01711911244767749,
+  "example_row": [
+    {
+      "feature": "cand_recent_score",
+      "group": "candidate",
+      "value": 11.629435993918184,
+      "description": "Time-decayed weight of the user's own past actions on this item"
+    },
+    {
+      "feature": "cand_covisit_score",
+      "group": "candidate",
+      "value": 3.563714567818133,
+      "description": "Co-visitation: how often this item is clicked in the same session as the user's recent items"
+    },
+    {
+      "feature": "cand_catpop_score",
+      "group": "candidate",
+      "value": 0.3806330014937516,
+      "description": "Popularity of the item inside the user's favourite categories"
+    },
+    {
+      "feature": "cand_global_pop_rank",
+      "group": "candidate",
+      "value": 0.0,
+      "description": "Rank in global trending list (999 = not in list)"
+    },
+    {
+      "feature": "cand_n_sources",
+      "group": "candidate",
+      "value": 4.0,
+      "description": "How many retrievers proposed this item"
+    },
+    {
+      "feature": "user_clicks_7d",
+      "group": "user",
+      "value": 9.0,
+      "description": "User's clicks in the last 7 days (activity level)"
+    },
+    {
+      "feature": "user_clicks_30d",
+      "group": "user",
+      "value": 45.0,
+      "description": "User's clicks in the last 30 days"
+    },
+    {
+      "feature": "user_orders_30d",
+      "group": "user",
+      "value": 14.0,
+      "description": "User's orders in the last 30 days"
+    },
+    {
+      "feature": "user_ctr_30d",
+      "group": "user",
+      "value": 0.13242368770395535,
+      "description": "User's click-through rate (smoothed)"
+    },
+    {
+      "feature": "user_days_since_active",
+      "group": "user",
+      "value": 1.3414814814814815,
+      "description": "Days since the user's last event"
+    },
+    {
+      "feature": "user_account_age_days",
+      "group": "user",
+      "value": 336.0,
+      "description": "Days since signup"
+    },
+    {
+      "feature": "user_device_tier",
+      "group": "user",
+      "value": 3.0,
+      "description": "Phone tier 1-3"
+    },
+    {
+      "feature": "user_age_bucket",
+      "group": "user",
+      "value": 3.0,
+      "description": "Age bucket 0-3"
+    },
+    {
+      "feature": "item_price",
+      "group": "item",
+      "value": 54100.0,
+      "description": "List price"
+    },
+    {
+      "feature": "item_discount_pct",
+      "group": "item",
+      "value": 0.0,
+      "description": "Standing discount"
+    },
+    {
+      "feature": "item_price_vs_category",
+      "group": "item",
+      "value": 0.6011111111111112,
+      "description": "Price / category median (cheap vs premium)"
+    },
+    {
+      "feature": "item_free_shipping",
+      "group": "item",
+      "value": 0.0,
+      "description": "Free-shipping eligible"
+    },
+    {
+      "feature": "item_rating_avg",
+      "group": "item",
+      "value": 5.0,
+      "description": "Average rating"
+    },
+    {
+      "feature": "item_rating_count",
+      "group": "item",
+      "value": 5.673323267171493,
+      "description": "Number of ratings (log1p)"
+    },
+    {
+      "feature": "item_age_days",
+      "group": "item",
+      "value": 245.0,
+      "description": "Days since listed (freshness / cold start)"
+    },
+    {
+      "feature": "item_impressions_7d",
+      "group": "item",
+      "value": 96.0,
+      "description": "Times shown in last 7 days"
+    },
+    {
+      "feature": "item_clicks_7d",
+      "group": "item",
+      "value": 29.0,
+      "description": "Clicks in last 7 days"
+    },
+    {
+      "feature": "item_orders_7d",
+      "group": "item",
+      "value": 14.0,
+      "description": "Orders in last 7 days"
+    },
+    {
+      "feature": "item_ctr_30d",
+      "group": "item",
+      "value": 0.33187546951591895,
+      "description": "Clicks / impressions, Bayesian-smoothed"
+    },
+    {
+      "feature": "item_cvr_30d",
+      "group": "item",
+      "value": 0.47692112585843527,
+      "description": "Orders / clicks, Bayesian-smoothed"
+    },
+    {
+      "feature": "item_trend",
+      "group": "item",
+      "value": 1.0,
+      "description": "Clicks last 3d vs last 14d rate (>1 = heating up)"
+    },
+    {
+      "feature": "item_return_rate",
+      "group": "item",
+      "value": 0.002074150894477573,
+      "description": "Returns / orders, smoothed (quality signal)"
+    },
+    {
+      "feature": "item_is_consumable",
+      "group": "item",
+      "value": 1.0,
+      "description": "Category is repeat-purchase"
+    },
+    {
+      "feature": "shop_rating",
+      "group": "shop",
+      "value": 4.31,
+      "description": "Seller rating"
+    },
+    {
+      "feature": "shop_is_mall",
+      "group": "shop",
+      "value": 0.0,
+      "description": "Mall / official store"
+    },
+    {
+      "feature": "shop_cancel_rate",
+      "group": "shop",
+      "value": 0.0002,
+      "description": "Seller cancellation rate"
+    },
+    {
+      "feature": "shop_response_rate",
+      "group": "shop",
+      "value": 0.791,
+      "description": "Seller chat response rate"
+    },
+    {
+      "feature": "ui_clicks",
+      "group": "user_item",
+      "value": 6.0,
+      "description": "Times this user clicked this item"
+    },
+    {
+      "feature": "ui_carts",
+      "group": "user_item",
+      "value": 6.0,
+      "description": "Times this user carted this item"
+    },
+    {
+      "feature": "ui_orders",
+      "group": "user_item",
+      "value": 5.0,
+      "description": "Times this user ordered this item"
+    },
+    {
+      "feature": "ui_hours_since_last",
+      "group": "user_item",
+      "value": 59.72583333333333,
+      "description": "Hours since user last touched the item (9999 = never)"
+    },
+    {
+      "feature": "ui_ignored_impressions",
+      "group": "user_item",
+      "value": 0.0,
+      "description": "Times shown but never clicked (fatigue)"
+    },
+    {
+      "feature": "ui_max_dwell_sec",
+      "group": "user_item",
+      "value": 449.9,
+      "description": "Longest product-page dwell on this item"
+    },
+    {
+      "feature": "uc_click_share_30d",
+      "group": "user_category",
+      "value": 0.3111111111111111,
+      "description": "Share of user's clicks in this item's category"
+    },
+    {
+      "feature": "uc_searches_30d",
+      "group": "user_category",
+      "value": 2.0,
+      "description": "User's searches that map to this category"
+    },
+    {
+      "feature": "uc_orders",
+      "group": "user_category",
+      "value": 8.0,
+      "description": "User's orders in this category"
+    },
+    {
+      "feature": "uc_days_since_order",
+      "group": "user_category",
+      "value": 2.4885763888888888,
+      "description": "Days since last order in the category (re-purchase cycle; 999 = never)"
+    },
+    {
+      "feature": "us_clicks",
+      "group": "user_shop",
+      "value": 6.0,
+      "description": "User's clicks on this shop's items"
+    },
+    {
+      "feature": "us_orders",
+      "group": "user_shop",
+      "value": 5.0,
+      "description": "User's orders from this shop"
+    },
+    {
+      "feature": "price_ratio_to_user",
+      "group": "user_item",
+      "value": 0.6204128440366973,
+      "description": "Item price / user's median clicked price in the category"
+    },
+    {
+      "feature": "same_city",
+      "group": "context",
+      "value": 0.0,
+      "description": "Ship-from city == user's city (faster, cheaper delivery)"
+    }
+  ],
+  "dist_stats": [
+    {
+      "feature": "cand_recent_score",
+      "mean_positive": 0.8473785692449426,
+      "mean_negative": 0.09925774353431749,
+      "median_positive": 0.0,
+      "median_negative": 0.0
+    },
+    {
+      "feature": "item_ctr_30d",
+      "mean_positive": 0.14382110754616442,
+      "mean_negative": 0.14079868977639773,
+      "median_positive": 0.1347916460729074,
+      "median_negative": 0.12905775064227568
+    },
+    {
+      "feature": "uc_click_share_30d",
+      "mean_positive": 0.44661839046421165,
+      "mean_negative": 0.24491797536028262,
+      "median_positive": 0.46153846153846156,
+      "median_negative": 0.14285714285714285
+    },
+    {
+      "feature": "item_clicks_7d",
+      "mean_positive": 5.8925816023738875,
+      "mean_negative": 5.203932067436404,
+      "median_positive": 4.0,
+      "median_negative": 3.0
+    },
+    {
+      "feature": "item_rating_count",
+      "mean_positive": 4.555080293006011,
+      "mean_negative": 4.414351844300399,
+      "median_positive": 4.919980925828125,
+      "median_negative": 4.68213122712422
+    },
+    {
+      "feature": "price_ratio_to_user",
+      "mean_positive": 1.0725704365935693,
+      "mean_negative": 1.1181209240741907,
+      "median_positive": 0.9795918367346939,
+      "median_negative": 0.9816005716327261
+    }
+  ],
+  "dist_features": [
+    "cand_recent_score",
+    "item_ctr_30d",
+    "uc_click_share_30d",
+    "item_clicks_7d",
+    "item_rating_count",
+    "price_ratio_to_user"
+  ],
+  "results": [
+    {
+      "method": "honest ranker",
+      "recall@20": 0.2725058982124638,
+      "order_recall@20": 0.4209608843537415,
+      "ndcg@20": 0.21160884313570416,
+      "recall@5": 0.15025923066174016,
+      "recall@10": 0.20153935862675534,
+      "recall@50": 0.3823743850065361,
+      "coverage@20": 0.4244915620943315
+    },
+    {
+      "method": "leaky ranker",
+      "recall@20": 0.46454122672987197,
+      "order_recall@20": 0.615999820981024,
+      "ndcg@20": 0.5035085195015984,
+      "recall@5": 0.4538046163690614,
+      "recall@10": 0.4640503404774477,
+      "recall@50": 0.46454122672987197,
+      "coverage@20": 0.590653396797923
+    }
+  ],
+  "leaky_gain_share": 0.8854321233230561
+}

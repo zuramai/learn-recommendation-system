@@ -1,0 +1,77 @@
+
+=== Three ways to order the same candidates ===
+                    recall@5  recall@10  recall@20  recall@50  order_recall@20  ndcg@20  coverage@20
+method                                                                                              
+heuristic blend       0.1153     0.1769     0.2526     0.3753           0.3978   0.1674       0.5682
+pointwise LightGBM    0.1577     0.2176     0.2836     0.3915           0.4250   0.2146       0.4777
+LambdaMART            0.1503     0.2015     0.2725     0.3824           0.4210   0.2116       0.4245
+
+candidate recall ceiling: 0.4645
+
+=== Seed check: pointwise vs LambdaMART over 4 seeds (ndcg@20) ===
+      pointwise  lambdamart
+seed                       
+0        0.2146      0.2116
+1        0.2134      0.2108
+2        0.2167      0.2155
+3        0.2142      0.2121
+mean: {'pointwise': 0.2147, 'lambdamart': 0.2125}  std: {'pointwise': 0.0014, 'lambdamart': 0.0021}
+At this data size pointwise is marginally ahead (about one seed-std): with ~100 candidates per user and few
+positives, the list-aware objective has little extra to exploit. Both beat the heuristic blend by a wide margin.
+
+=== Feature importance (share of total gain), top 15 ===
+  ui_max_dwell_sec         user_item      0.063
+  item_impressions_7d      item           0.054
+  cand_catpop_score        candidate      0.051
+  user_account_age_days    user           0.042
+  uc_click_share_30d       user_category  0.042
+  price_ratio_to_user      user_item      0.042
+  user_days_since_active   user           0.038
+  user_ctr_30d             user           0.035
+  item_return_rate         item           0.032
+  user_clicks_30d          user           0.031
+  item_price               item           0.030
+  ui_carts                 user_item      0.028
+  cand_recent_score        candidate      0.028
+  ui_orders                user_item      0.028
+  item_ctr_30d             item           0.026
+
+Gain share by feature group:
+group
+item             0.309
+user_item        0.198
+user             0.189
+candidate        0.134
+user_category    0.086
+shop             0.065
+user_shop        0.014
+context          0.004
+
+=== SHAP breakdown: first recommendation for user 42 ===
+candidates scored: 106; top item_id=2381 score=1.277
+  ui_max_dwell_sec         value=   449.900  contribution=+0.735   Longest product-page dwell on this item
+  item_is_consumable       value=     1.000  contribution=+0.666   Category is repeat-purchase
+  cand_covisit_score       value=     4.028  contribution=-0.505   Co-visitation: how often this item is clicked in the same session as the user's recent items
+  item_impressions_7d      value=    93.000  contribution=+0.425   Times shown in last 7 days
+  ui_orders                value=     5.000  contribution=+0.407   Times this user ordered this item
+  item_return_rate         value=     0.002  contribution=+0.348   Returns / orders, smoothed (quality signal)
+  ui_carts                 value=     6.000  contribution=+0.336   Times this user carted this item
+  uc_days_since_order      value=     6.465  contribution=+0.314   Days since last order in the category (re-purchase cycle; 999 = never)
+  (bias / base score: -2.917; contributions + bias = raw score)
+  sum of all contributions + bias = 1.277  (model score 1.277)
+
+Top 10 recommended item ids for user 42: [2381, 2200, 1872, 2015, 87, 873, 1743, 30, 2482, 414]
+
+=== Ablation: retrain without one feature group (delta vs full model) ===
+                       recall@20  order_recall@20  ndcg@20
+without item             -0.0321          -0.0492  -0.0328
+without user_item        -0.0069          -0.0235  -0.0114
+without user_category    -0.0159          -0.0148  -0.0034
+without context           0.0011          -0.0022   0.0018
+without user             -0.0037           0.0032   0.0023
+without shop             -0.0017           0.0023   0.0042
+without candidate         0.0045           0.0144   0.0046
+without user_shop         0.0055           0.0043   0.0047
+seed noise (±1 std)       0.0021           0.0059   0.0021
+
+The last row is the std over 4 seeds of the *same* model: deltas smaller than it are noise.

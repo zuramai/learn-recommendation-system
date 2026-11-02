@@ -1,0 +1,36 @@
+
+=== Retrievers one by one (eval users: 947, label pairs: 3357) ===
+                  cands_per_user  users_with_cands  recall  pair_recall  unique_pair_recall
+source                                                                                     
+recent                   12.1880            0.9704  0.1833       0.2049              0.0298
+covisit                  35.8321            0.9683  0.2818       0.3125              0.0524
+catpop                   54.9102            0.9778  0.3274       0.3545              0.0968
+global_trending          30.0000            1.0000  0.0969       0.0983              0.0253
+UNION (generate)        103.9366            1.0000  0.4645       0.5019                 NaN
+
+recall = mean over users of (their future positives that are in the set);
+pair_recall = same, pooled over all (user, item) positives; unique = found by this source only.
+
+=== Recall vs list length K (candidates ranked by their own score) ===
+     recent  covisit  catpop  global_trending  union (heuristic blend)  union ceiling (all candidates)
+K                                                                                                     
+5    0.1130   0.0789  0.0898           0.0300                   0.1153                          0.4645
+10   0.1547   0.1303  0.1443           0.0473                   0.1769                          0.4645
+20   0.1833   0.2025  0.2135           0.0775                   0.2526                          0.4645
+30   0.1833   0.2453  0.2656           0.0969                   0.3053                          0.4645
+50   0.1833   0.2818  0.3143           0.0969                   0.3753                          0.4645
+75   0.1833   0.2818  0.3274           0.0969                   0.4242                          0.4645
+100  0.1833   0.2818  0.3274           0.0969                   0.4557                          0.4645
+
+=== Union: how many sources proposed each candidate ===
+                candidates  positive_rate
+cand_n_sources                           
+1                    76612         0.0090
+2                    16890         0.0319
+3                     4304         0.0806
+4                      622         0.1817
+
+=== Union ranked by the heuristic blend ===
+                         recall@5  recall@10  recall@20  recall@50  order_recall@20  ndcg@20  coverage@20
+method                                                                                                   
+union + heuristic blend    0.1153     0.1769     0.2526     0.3753           0.3978   0.1674       0.5682

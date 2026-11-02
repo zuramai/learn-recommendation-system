@@ -1,0 +1,9 @@
+
+=== Recommend(k=20) for 200 random users at 127.0.0.1:50051 ===
+model_version=20261102-060535 (first call is a warm-up and not counted)
+                            p50      p90      p99     mean      max
+server latency_ms         839.9    892.5    985.0    840.1   1010.6
+client wall ms            840.9    893.5    986.1    841.1   1011.8
+
+candidates scored per request: mean 102, min 30, max 129
+items returned per request:   mean 20.0

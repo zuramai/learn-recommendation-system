@@ -1,0 +1,38 @@
+
+=== Click-through rate by display position (all impressions before the cutoff) ===
+          impressions  clicks     ctr
+position                             
+0               16770    3999  0.2385
+1               16770    2908  0.1734
+2               16770    2770  0.1652
+3               16770    2490  0.1485
+4               16770    2289  0.1365
+5               16770    2093  0.1248
+6               16770    1128  0.0673
+7               16770     933  0.0556
+8               16770     881  0.0525
+9               16770     818  0.0488
+10              16770     702  0.0419
+11              16770     262  0.0156
+
+position 0 vs position 11: 15.3x higher CTR
+Part of this is *position bias* (people look at the top) and part is that better items are placed higher.
+
+=== Metrics by user activity (clicks before the cutoff) ===
+                        users  recall@20  order_recall@20  ndcg@20
+bucket      method                                                
+0-2 clicks  pop_7d         78     0.0795           0.0753   0.0241
+            LambdaMART     78     0.1108           0.1774   0.0666
+3-10 clicks pop_7d        258     0.0785           0.0938   0.0489
+            LambdaMART    258     0.2143           0.3184   0.1395
+>10 clicks  pop_7d        611     0.0785           0.1136   0.0499
+            LambdaMART    611     0.3177           0.4764   0.2606
+  0-2 clicks   LambdaMART / pop_7d ndcg@20 = 2.76x
+  3-10 clicks  LambdaMART / pop_7d ndcg@20 = 2.86x
+  >10 clicks   LambdaMART / pop_7d ndcg@20 = 5.22x
+
+=== Share of NEW items (listed < 7 days before the cutoff) in the top 20 ===
+  catalogue (available items)   2.16%
+  pop_7d                        0.00%
+  LambdaMART                    0.25%
+  future positives              2.68%

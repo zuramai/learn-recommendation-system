@@ -1,0 +1,84 @@
+
+=== Frames ===
+train frame:   78793 rows, 781 users, 1221 positive rows  (cutoff 2026-09-16 00:00:00)
+eval  frame:   98428 rows, 947 users, 1685 positive rows  (cutoff 2026-09-23 00:00:00)
+number of features: 46 in 8 groups
+
+=== One candidate row, every feature (user 42, best heuristic score) ===
+user_id=42 item_id=2381 category_id=9 shop_id=10 label=0
+  [candidate]
+    cand_recent_score      =     11.629   Time-decayed weight of the user's own past actions on this item
+    cand_covisit_score     =      3.564   Co-visitation: how often this item is clicked in the same session as the user's recent items
+    cand_catpop_score      =      0.381   Popularity of the item inside the user's favourite categories
+    cand_global_pop_rank   =      0.000   Rank in global trending list (999 = not in list)
+    cand_n_sources         =      4.000   How many retrievers proposed this item
+  [user]
+    user_clicks_7d         =      9.000   User's clicks in the last 7 days (activity level)
+    user_clicks_30d        =     45.000   User's clicks in the last 30 days
+    user_orders_30d        =     14.000   User's orders in the last 30 days
+    user_ctr_30d           =      0.132   User's click-through rate (smoothed)
+    user_days_since_active =      1.341   Days since the user's last event
+    user_account_age_days  =    336.000   Days since signup
+    user_device_tier       =      3.000   Phone tier 1-3
+    user_age_bucket        =      3.000   Age bucket 0-3
+  [item]
+    item_price             =  54100.000   List price
+    item_discount_pct      =      0.000   Standing discount
+    item_price_vs_category =      0.601   Price / category median (cheap vs premium)
+    item_free_shipping     =      0.000   Free-shipping eligible
+    item_rating_avg        =      5.000   Average rating
+    item_rating_count      =      5.673   Number of ratings (log1p)
+    item_age_days          =    245.000   Days since listed (freshness / cold start)
+    item_impressions_7d    =     96.000   Times shown in last 7 days
+    item_clicks_7d         =     29.000   Clicks in last 7 days
+    item_orders_7d         =     14.000   Orders in last 7 days
+    item_ctr_30d           =      0.332   Clicks / impressions, Bayesian-smoothed
+    item_cvr_30d           =      0.477   Orders / clicks, Bayesian-smoothed
+    item_trend             =      1.000   Clicks last 3d vs last 14d rate (>1 = heating up)
+    item_return_rate       =      0.002   Returns / orders, smoothed (quality signal)
+    item_is_consumable     =      1.000   Category is repeat-purchase
+  [shop]
+    shop_rating            =      4.310   Seller rating
+    shop_is_mall           =      0.000   Mall / official store
+    shop_cancel_rate       =      0.000   Seller cancellation rate
+    shop_response_rate     =      0.791   Seller chat response rate
+  [user_item]
+    ui_clicks              =      6.000   Times this user clicked this item
+    ui_carts               =      6.000   Times this user carted this item
+    ui_orders              =      5.000   Times this user ordered this item
+    ui_hours_since_last    =     59.726   Hours since user last touched the item (9999 = never)
+    ui_ignored_impressions =      0.000   Times shown but never clicked (fatigue)
+    ui_max_dwell_sec       =    449.900   Longest product-page dwell on this item
+  [user_category]
+    uc_click_share_30d     =      0.311   Share of user's clicks in this item's category
+    uc_searches_30d        =      2.000   User's searches that map to this category
+    uc_orders              =      8.000   User's orders in this category
+    uc_days_since_order    =      2.489   Days since last order in the category (re-purchase cycle; 999 = never)
+  [user_shop]
+    us_clicks              =      6.000   User's clicks on this shop's items
+    us_orders              =      5.000   User's orders from this shop
+  [user_item]
+    price_ratio_to_user    =      0.620   Item price / user's median clicked price in the category
+  [context]
+    same_city              =      0.000   Ship-from city == user's city (faster, cheaper delivery)
+
+=== Positives vs negatives (eval frame): mean of selected features ===
+                     mean_positive  mean_negative  median_positive  median_negative
+feature                                                                            
+cand_recent_score            0.847          0.099            0.000            0.000
+item_ctr_30d                 0.144          0.141            0.135            0.129
+uc_click_share_30d           0.447          0.245            0.462            0.143
+item_clicks_7d               5.893          5.204            4.000            3.000
+item_rating_count            4.555          4.414            4.920            4.682
+price_ratio_to_user          1.073          1.118            0.980            0.982
+base rate of positives among candidates: 0.0171
+
+=== Leakage demo: add the user's clicks on the item *inside the label window* ===
+               recall@5  recall@10  recall@20  recall@50  order_recall@20  ndcg@20  coverage@20
+method                                                                                         
+honest ranker    0.1503     0.2015     0.2725     0.3824            0.421   0.2116       0.4245
+leaky ranker     0.4538     0.4641     0.4645     0.4645            0.616   0.5035       0.5907
+
+leaky_future_clicks share of total gain: 88.5% (rank 1 of 47)
+ndcg@20 inflation: 2.38x
+The leaky model looks brilliant offline and would be useless live: in production the future is not available.

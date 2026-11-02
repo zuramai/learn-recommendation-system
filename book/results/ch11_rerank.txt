@@ -1,0 +1,21 @@
+
+=== MMR:  pick argmax  lambda * relevance - (1 - lambda) * max similarity to already chosen ===
+
+=== Repo rule-based re-ranker (rerank.rerank: bought-durable filter + caps 8/category, 4/shop) ===
+
+=== Results (same eval users and labels as every chapter) ===
+                            recall@5  recall@10  recall@20  recall@50  order_recall@20  ndcg@20  coverage@20  distinct_categories@20
+method                                                                                                                              
+MMR lambda=1.0                0.1503     0.2015     0.2725     0.3824           0.4210   0.2116       0.4245                  5.3263
+MMR lambda=0.9                0.1459     0.1921     0.2648     0.3788           0.4149   0.2081       0.4063                  6.7782
+MMR lambda=0.7                0.1163     0.1674     0.2398     0.3688           0.3927   0.1884       0.3726                 11.0317
+MMR lambda=0.5                0.0930     0.1169     0.1907     0.3582           0.3164   0.1603       0.3354                 16.2777
+MMR lambda=0.3                0.0927     0.1030     0.1430     0.3580           0.2351   0.1401       0.3129                 18.6864
+rerank.rerank caps            0.1496     0.1971     0.2505     0.2956           0.3955   0.2044       0.3825                  6.5787
+already-bought filter only    0.1496     0.1998     0.2724     0.3789           0.4210   0.2109       0.4288                  5.3569
+
+LambdaMART alone: ndcg@20 0.2116, 5.33 distinct categories in the top 20
+  MMR lambda=0.9     ndcg change -0.0035, distinct categories +1.45
+  MMR lambda=0.7     ndcg change -0.0232, distinct categories +5.71
+  MMR lambda=0.5     ndcg change -0.0513, distinct categories +10.95
+  MMR lambda=0.3     ndcg change -0.0715, distinct categories +13.36

@@ -1,0 +1,132 @@
+{
+  "position": [
+    {
+      "position": 0,
+      "impressions": 16770,
+      "clicks": 3999,
+      "ctr": 0.23846153846153847
+    },
+    {
+      "position": 1,
+      "impressions": 16770,
+      "clicks": 2908,
+      "ctr": 0.17340488968395945
+    },
+    {
+      "position": 2,
+      "impressions": 16770,
+      "clicks": 2770,
+      "ctr": 0.16517590936195586
+    },
+    {
+      "position": 3,
+      "impressions": 16770,
+      "clicks": 2490,
+      "ctr": 0.148479427549195
+    },
+    {
+      "position": 4,
+      "impressions": 16770,
+      "clicks": 2289,
+      "ctr": 0.13649373881932023
+    },
+    {
+      "position": 5,
+      "impressions": 16770,
+      "clicks": 2093,
+      "ctr": 0.1248062015503876
+    },
+    {
+      "position": 6,
+      "impressions": 16770,
+      "clicks": 1128,
+      "ctr": 0.06726296958855098
+    },
+    {
+      "position": 7,
+      "impressions": 16770,
+      "clicks": 933,
+      "ctr": 0.0556350626118068
+    },
+    {
+      "position": 8,
+      "impressions": 16770,
+      "clicks": 881,
+      "ctr": 0.05253428741800835
+    },
+    {
+      "position": 9,
+      "impressions": 16770,
+      "clicks": 818,
+      "ctr": 0.04877757901013715
+    },
+    {
+      "position": 10,
+      "impressions": 16770,
+      "clicks": 702,
+      "ctr": 0.04186046511627907
+    },
+    {
+      "position": 11,
+      "impressions": 16770,
+      "clicks": 262,
+      "ctr": 0.015623136553369112
+    }
+  ],
+  "buckets": [
+    {
+      "bucket": "0-2 clicks",
+      "method": "pop_7d",
+      "users": 78,
+      "recall@20": 0.0794871794871795,
+      "order_recall@20": 0.07526881720430106,
+      "ndcg@20": 0.024091217677247246
+    },
+    {
+      "bucket": "0-2 clicks",
+      "method": "LambdaMART",
+      "users": 78,
+      "recall@20": 0.11082621082621082,
+      "order_recall@20": 0.1774193548387097,
+      "ndcg@20": 0.06660753537285295
+    },
+    {
+      "bucket": "3-10 clicks",
+      "method": "pop_7d",
+      "users": 258,
+      "recall@20": 0.07854849715314831,
+      "order_recall@20": 0.09375,
+      "ndcg@20": 0.04885944499170279
+    },
+    {
+      "bucket": "3-10 clicks",
+      "method": "LambdaMART",
+      "users": 258,
+      "recall@20": 0.21428943200489028,
+      "order_recall@20": 0.318359375,
+      "ndcg@20": 0.13951509153538066
+    },
+    {
+      "bucket": ">10 clicks",
+      "method": "pop_7d",
+      "users": 611,
+      "recall@20": 0.07854973268230224,
+      "order_recall@20": 0.11363462274990425,
+      "ndcg@20": 0.049926721854445986
+    },
+    {
+      "bucket": ">10 clicks",
+      "method": "LambdaMART",
+      "users": 611,
+      "recall@20": 0.31772826138379234,
+      "order_recall@20": 0.4764106983275883,
+      "ndcg@20": 0.26056185445875796
+    }
+  ],
+  "new_item_share": {
+    "catalogue (available items)": 0.021635655560363478,
+    "pop_7d": 0.0,
+    "LambdaMART": 0.0025343189017951427,
+    "future positives": 0.02680965147453083
+  }
+}

@@ -1,0 +1,394 @@
+{
+  "results": [
+    {
+      "method": "heuristic blend",
+      "recall@20": 0.2526442840965482,
+      "order_recall@20": 0.3977958288578589,
+      "ndcg@20": 0.1673622435948948,
+      "recall@5": 0.11527961344409571,
+      "recall@10": 0.1769266270788104,
+      "recall@50": 0.3753001498435997,
+      "coverage@20": 0.568152315015145
+    },
+    {
+      "method": "pointwise LightGBM",
+      "recall@20": 0.28361220947717003,
+      "order_recall@20": 0.4250268528464017,
+      "ndcg@20": 0.21455462562020805,
+      "recall@5": 0.15773473253596243,
+      "recall@10": 0.21763368110035605,
+      "recall@50": 0.39148741207098864,
+      "coverage@20": 0.4777152747728256
+    },
+    {
+      "method": "LambdaMART",
+      "recall@20": 0.2725058982124638,
+      "order_recall@20": 0.4209608843537415,
+      "ndcg@20": 0.21160884313570416,
+      "recall@5": 0.15025923066174016,
+      "recall@10": 0.20153935862675534,
+      "recall@50": 0.3823743850065361,
+      "coverage@20": 0.4244915620943315
+    }
+  ],
+  "seed_check": [
+    {
+      "seed": 0,
+      "pointwise": 0.21455462562020805,
+      "lambdamart": 0.21160884313570416
+    },
+    {
+      "seed": 1,
+      "pointwise": 0.21336541929674074,
+      "lambdamart": 0.2107585361287245
+    },
+    {
+      "seed": 2,
+      "pointwise": 0.21674012896296294,
+      "lambdamart": 0.2155140914318212
+    },
+    {
+      "seed": 3,
+      "pointwise": 0.21417544271580058,
+      "lambdamart": 0.21206490706793013
+    }
+  ],
+  "candidate_recall": 0.46454122672987197,
+  "importance": [
+    {
+      "feature": "ui_max_dwell_sec",
+      "group": "user_item",
+      "gain_share": 0.06335616832244824
+    },
+    {
+      "feature": "item_impressions_7d",
+      "group": "item",
+      "gain_share": 0.053565424429278106
+    },
+    {
+      "feature": "cand_catpop_score",
+      "group": "candidate",
+      "gain_share": 0.05091721664811431
+    },
+    {
+      "feature": "user_account_age_days",
+      "group": "user",
+      "gain_share": 0.04236052912156314
+    },
+    {
+      "feature": "uc_click_share_30d",
+      "group": "user_category",
+      "gain_share": 0.04221161926534679
+    },
+    {
+      "feature": "price_ratio_to_user",
+      "group": "user_item",
+      "gain_share": 0.04158728597957944
+    },
+    {
+      "feature": "user_days_since_active",
+      "group": "user",
+      "gain_share": 0.038229003220902266
+    },
+    {
+      "feature": "user_ctr_30d",
+      "group": "user",
+      "gain_share": 0.03539184001156892
+    },
+    {
+      "feature": "item_return_rate",
+      "group": "item",
+      "gain_share": 0.03166491408475251
+    },
+    {
+      "feature": "user_clicks_30d",
+      "group": "user",
+      "gain_share": 0.03120774217660694
+    },
+    {
+      "feature": "item_price",
+      "group": "item",
+      "gain_share": 0.030115981253830165
+    },
+    {
+      "feature": "ui_carts",
+      "group": "user_item",
+      "gain_share": 0.028426517958386997
+    },
+    {
+      "feature": "cand_recent_score",
+      "group": "candidate",
+      "gain_share": 0.02840920864331374
+    },
+    {
+      "feature": "ui_orders",
+      "group": "user_item",
+      "gain_share": 0.028249636374723306
+    },
+    {
+      "feature": "item_ctr_30d",
+      "group": "item",
+      "gain_share": 0.025939621488470822
+    },
+    {
+      "feature": "item_cvr_30d",
+      "group": "item",
+      "gain_share": 0.025190837213024377
+    },
+    {
+      "feature": "cand_n_sources",
+      "group": "candidate",
+      "gain_share": 0.025168041107029984
+    },
+    {
+      "feature": "item_trend",
+      "group": "item",
+      "gain_share": 0.025009550606424482
+    },
+    {
+      "feature": "uc_days_since_order",
+      "group": "user_category",
+      "gain_share": 0.024224522431217036
+    },
+    {
+      "feature": "ui_hours_since_last",
+      "group": "user_item",
+      "gain_share": 0.024108239465333702
+    },
+    {
+      "feature": "item_is_consumable",
+      "group": "item",
+      "gain_share": 0.02353325761753829
+    },
+    {
+      "feature": "shop_cancel_rate",
+      "group": "shop",
+      "gain_share": 0.02285204350697859
+    },
+    {
+      "feature": "cand_covisit_score",
+      "group": "candidate",
+      "gain_share": 0.022206383881678084
+    },
+    {
+      "feature": "item_rating_count",
+      "group": "item",
+      "gain_share": 0.021053423580820418
+    },
+    {
+      "feature": "shop_response_rate",
+      "group": "shop",
+      "gain_share": 0.02086731762838306
+    },
+    {
+      "feature": "shop_rating",
+      "group": "shop",
+      "gain_share": 0.019821300125164577
+    },
+    {
+      "feature": "item_age_days",
+      "group": "item",
+      "gain_share": 0.01972021526191836
+    },
+    {
+      "feature": "item_price_vs_category",
+      "group": "item",
+      "gain_share": 0.01932986182272563
+    },
+    {
+      "feature": "user_orders_30d",
+      "group": "user",
+      "gain_share": 0.016205816353568506
+    },
+    {
+      "feature": "uc_orders",
+      "group": "user_category",
+      "gain_share": 0.013814160519093913
+    },
+    {
+      "feature": "user_clicks_7d",
+      "group": "user",
+      "gain_share": 0.011820893490111348
+    },
+    {
+      "feature": "item_clicks_7d",
+      "group": "item",
+      "gain_share": 0.011692714505810525
+    },
+    {
+      "feature": "item_rating_avg",
+      "group": "item",
+      "gain_share": 0.009904636296698363
+    },
+    {
+      "feature": "user_age_bucket",
+      "group": "user",
+      "gain_share": 0.009331383147915331
+    },
+    {
+      "feature": "cand_global_pop_rank",
+      "group": "candidate",
+      "gain_share": 0.0077223474297207695
+    },
+    {
+      "feature": "ui_ignored_impressions",
+      "group": "user_item",
+      "gain_share": 0.007692667590840749
+    },
+    {
+      "feature": "us_orders",
+      "group": "user_shop",
+      "gain_share": 0.007559075149743991
+    },
+    {
+      "feature": "us_clicks",
+      "group": "user_shop",
+      "gain_share": 0.006184123445778186
+    },
+    {
+      "feature": "item_orders_7d",
+      "group": "item",
+      "gain_share": 0.006183310946939009
+    },
+    {
+      "feature": "uc_searches_30d",
+      "group": "user_category",
+      "gain_share": 0.0057482027784772115
+    },
+    {
+      "feature": "ui_clicks",
+      "group": "user_item",
+      "gain_share": 0.005017353988318373
+    },
+    {
+      "feature": "user_device_tier",
+      "group": "user",
+      "gain_share": 0.004848107037809232
+    },
+    {
+      "feature": "item_discount_pct",
+      "group": "item",
+      "gain_share": 0.004147707113860609
+    },
+    {
+      "feature": "same_city",
+      "group": "context",
+      "gain_share": 0.003850392991131668
+    },
+    {
+      "feature": "item_free_shipping",
+      "group": "item",
+      "gain_share": 0.0021439755342423836
+    },
+    {
+      "feature": "shop_is_mall",
+      "group": "shop",
+      "gain_share": 0.001415428452817553
+    }
+  ],
+  "group_gain_share": {
+    "item": 0.30919543175633407,
+    "user_item": 0.1984378696796308,
+    "user": 0.18939531456004569,
+    "candidate": 0.1344231977098569,
+    "user_category": 0.08599850499413496,
+    "shop": 0.06495608971334378,
+    "user_shop": 0.013743198595522177,
+    "context": 0.003850392991131668
+  },
+  "shap_user42": {
+    "item_id": 2381,
+    "score": 1.2766289140660156,
+    "bias": -2.917060528592418,
+    "contributions": [
+      {
+        "feature": "ui_max_dwell_sec",
+        "value": 449.9,
+        "contribution": 0.7350261399836114
+      },
+      {
+        "feature": "item_is_consumable",
+        "value": 1.0,
+        "contribution": 0.6660804550718846
+      },
+      {
+        "feature": "cand_covisit_score",
+        "value": 4.027860123236707,
+        "contribution": -0.5054087308428571
+      },
+      {
+        "feature": "item_impressions_7d",
+        "value": 93.0,
+        "contribution": 0.4252710939018951
+      },
+      {
+        "feature": "ui_orders",
+        "value": 5.0,
+        "contribution": 0.4067304984366224
+      },
+      {
+        "feature": "item_return_rate",
+        "value": 0.0016793100672556742,
+        "contribution": 0.34791677531707116
+      },
+      {
+        "feature": "ui_carts",
+        "value": 6.0,
+        "contribution": 0.33614793919068653
+      },
+      {
+        "feature": "uc_days_since_order",
+        "value": 6.46505787037037,
+        "contribution": 0.31392684938845056
+      }
+    ]
+  },
+  "ablation": {
+    "without item": {
+      "recall@20": -0.03208684824778987,
+      "order_recall@20": -0.049212316505549636,
+      "ndcg@20": -0.032828008456498914
+    },
+    "without user_item": {
+      "recall@20": -0.006943202424288142,
+      "order_recall@20": -0.02348505191550304,
+      "ndcg@20": -0.011444281100429193
+    },
+    "without user_category": {
+      "recall@20": -0.015851520159241073,
+      "order_recall@20": -0.014791442892946649,
+      "ndcg@20": -0.0033902545884369195
+    },
+    "without context": {
+      "recall@20": 0.0011349956129135808,
+      "order_recall@20": -0.002226548514142501,
+      "ndcg@20": 0.0018015562946059327
+    },
+    "without user": {
+      "recall@20": -0.0036720164321257243,
+      "order_recall@20": 0.003191013247404173,
+      "ndcg@20": 0.002314953011517268
+    },
+    "without shop": {
+      "recall@20": -0.001666334955669646,
+      "order_recall@20": 0.002300393841747239,
+      "ndcg@20": 0.004239972204820142
+    },
+    "without candidate": {
+      "recall@20": 0.004544118324477431,
+      "order_recall@20": 0.014393125671321116,
+      "ndcg@20": 0.004630856330993693
+    },
+    "without user_shop": {
+      "recall@20": 0.005498225091056963,
+      "order_recall@20": 0.004303168635875321,
+      "ndcg@20": 0.00474007057804357
+    },
+    "seed noise (\u00b11 std)": {
+      "recall@20": 0.002099301222152662,
+      "order_recall@20": 0.005911124850683871,
+      "ndcg@20": 0.002089672315189716
+    }
+  },
+  "full_ndcg@20": 0.21160884313570416
+}
