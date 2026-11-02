@@ -52,14 +52,7 @@ A decision tree turns a row of features into a number by asking a sequence of ye
 
 Take a toy training set of six candidate rows for one feature, `ui_max_dwell_sec` (the longest the user stayed on this item's page), with their graded labels.
 
-| row | dwell (s) | label |
-|---|---|---|
-| 1 | 0 | 0 |
-| 2 | 0 | 0 |
-| 3 | 5 | 0 |
-| 4 | 30 | 1 |
-| 5 | 60 | 2 |
-| 6 | 90 | 3 |
+(dwell seconds, label) = (0, 0), (0, 0), (5, 0), (30, 1), (60, 2), (90, 3), one row each, numbered 1 to 6.
 
 Boosting starts from a constant prediction, the mean label: $F_0 = (0+0+0+1+2+3)/6 = 1.0$. The **residual** of each row is what is left to explain, $r_i = y_i - F_0$, which gives $-1, -1, -1, 0, 1, 2$. Their sum of squares is $1+1+1+0+1+4 = 8$.
 
@@ -100,13 +93,13 @@ Source: Friedman, Annals of Statistics, 2001
 
 A pointwise objective (say log-loss on "was this row clicked or better?") treats each row as an independent example. It will happily spend model capacity on getting the 95th item's probability right. But Dina's page only shows the top 20 positions, and NDCG discounts the later of those heavily.
 
-Recall the definition from Chapter 2. For a ranked list with graded relevance $rel_i$ at position $i$ (1-based):
+Recall from Chapter 2, with graded relevance $rel_i$ at position $i$:
 
 $$\text{DCG@}K = \sum_{i=1}^{K} \frac{2^{rel_i}-1}{\log_2(i+1)}, \qquad \text{NDCG@}K = \frac{\text{DCG@}K}{\text{IDCG@}K},$$
 
 where IDCG is the DCG of the perfect ordering. The numerator $2^{rel}-1$ is the **gain**: a relevance of 0, 1, 2, 3 gives gains 0, 1, 3, 7. An order is worth seven clicks. The denominator is the **discount**: position 1 has weight $1$, position 2 has $0.631$, position 3 has $0.5$, and so on.
 
-The difficulty is that NDCG is a function of the *sorted order*, and sorting is not differentiable: nudging a score by $10^{-6}$ either changes nothing or flips two items. We cannot compute a gradient of NDCG with respect to scores. LambdaRank's trick (Burges, 2010) is wonderfully pragmatic: *skip the loss, define the gradient directly*.
+NDCG depends on the *sorted order*, which is not differentiable, so we cannot take its gradient. LambdaRank's trick (Burges, 2010) is pragmatic: *skip the loss, define the gradient directly*.
 
 ### Step 4: lambdas and the NDCG swap
 
@@ -122,7 +115,7 @@ $$\lambda_{ij} = \frac{-\sigma}{1 + e^{\sigma (s_i - s_j)}}\; \bigl|\Delta \text
 
 Swapping the items at positions $p_i$ and $p_j$ changes the DCG by $(g_i - g_j)\,(d_{p_i} - d_{p_j})$ in absolute value, where $g$ is the gain and $d_p = 1/\log_2(p+1)$ is the discount. Dividing by IDCG gives $|\Delta\text{NDCG}|$. A pair that is both mis-ordered *and* sits at the top of the list with a big gain gap gets a big lambda. A pair that is mis-ordered at positions 80 and 81, or whose gains are equal, gets almost none. That is how the algorithm "pays attention" to the top of the list without ever differentiating NDCG.
 
-Each row's total lambda is the sum over all pairs it takes part in, with a sign (pushed up for the more relevant member, pushed down for the less relevant). These per-row lambdas are then used *in place of the negative gradient* when fitting the next tree. That is **LambdaMART**: **MART** (multiple additive regression trees, an older name for gradient-boosted trees) driven by **lambda** gradients.
+Each row's lambda sums over all its pairs, signed up for the more relevant member and down for the less relevant. These lambdas replace the negative gradient when fitting the next tree: that is **LambdaMART** (**MART**, multiple additive regression trees, is an older name for gradient-boosted trees).
 
 ### A worked example of the swap delta
 
@@ -147,7 +140,7 @@ In this repo a label is not just 0 or 1. `schema.LABEL_GAIN` says a click is wor
 1. The model is rewarded for putting the item the user ordered above the item the user only clicked.
 2. The `label_gain=[0, 1, 3, 7]` parameter in LightGBM converts the integer labels to the gain $2^{rel}-1$ used in NDCG. LightGBM's default table happens to be the same $2^{rel}-1$ for these labels, but spelling it out in `PARAMS` keeps the objective and the offline evaluator from silently drifting apart; it means the objective being optimised and the metric being reported are the same function.
 
-One more detail: users with no positive label in the window carry no ordering information (every pair of their items has equal labels, so every $|\Delta\text{NDCG}|$ is 0). `ranker.train` drops them before training.
+Users with no positive in the window carry no ordering information (all their $|\Delta\text{NDCG}|$ are 0), so `ranker.train` drops them.
 
 ## Code walkthrough
 
@@ -293,12 +286,7 @@ The app's "Why this?" popover (`WhyThis.vue`, screenshot in Chapter 13) shows th
 
 Importance asks about the trained model. **Ablation** asks a counterfactual: if we had never had these features, would the model be worse? You answer it by retraining. `pipeline.group_ablation` removes one feature group at a time, retrains with the same settings, and reports the change in each metric against the full model.
 
-```include
-path: recommender/recsys/pipeline.py
-symbol: group_ablation
-```
-
-The last four lines are the key insight of the function and the reason this chapter keeps mentioning seeds. LightGBM's bagging and feature sampling make training slightly random. If you retrain the *same* full model with seeds 1, 2 and 3, you get slightly different metrics each time. Their standard deviation is the **noise floor** of the experiment. A delta smaller than the noise floor tells you nothing, because rerunning with a different seed could easily flip its sign.
+`pipeline.group_ablation` retrains without each feature group, and also retrains the *full* model with seeds 1, 2 and 3. Their standard deviation is the **noise floor**: a delta smaller than it tells you nothing, because a different seed could flip its sign.
 
 ```output
 file: results/ch10_ltr.txt
@@ -316,24 +304,14 @@ The seed noise on ndcg@20 is 0.0021 (the shaded band). Compare each row's ndcg@2
 
 Compare with gain importance: the candidate group has 13.4% of the gain and the user group 18.9%, yet removing either does not hurt, because correlated features (the user-item evidence echoes the retriever scores) take over. Gain importance never reveals that.
 
-::: warning
-**Do not read a positive ablation delta as a finding.** A delta of +0.0046 for "without candidate" is roughly twice the seed noise, and both signs are possible on a rerun. Experiments on one split of one simulated dataset are only suggestive. If a decision (say, dropping a costly feature pipeline) depends on the result, repeat it over more seeds and more time windows first.
-:::
-
 ## Pitfalls and production practice
 
 - **Leakage.** A leaky feature took offline ndcg@20 from the honest 0.2116 to 0.5035 in Chapter 9. Build features as of a cutoff via `History.at` and keep `tests/test_point_in_time.py`.
 - **Group boundaries.** LightGBM's `group=` is a list of consecutive sizes; unsorted rows run silently and train garbage. Sort first, as `ranker.train` does.
 - **Scores have no scale.** Do not threshold LambdaMART scores or mix them with probabilities; use a pointwise model or calibration where a probability is needed.
 - **Label design is product design.** The click 1 / cart 2 / order 3 table is a business opinion; production teams often train separate heads and combine them (Chapter 14).
-- **Train/serve skew.** Live serving here calls the same `features.build` as training; separate batch and online code paths drift silently.
-- **Position bias.** Logged clicks favour whatever the previous ranker showed on top (Chapter 12).
 - **Retrain as deploy.** The service retrains every six hours and from the admin button; refuse to swap in a model worse than the heuristic baseline.
-- **Explanations are not causal.** A SHAP bar says a value pushed the score up relative to the baseline, not what would happen if the user acted differently.
-
-::: tip
-**Always keep a "dumb" baseline in the table.** The cheapest insurance in applied ML is a one-line baseline (`global popular`, a blend, pointwise logistic regression) that is evaluated by the same function, on the same split, with the same seeds. If your sophisticated model cannot clearly beat it, the fault is more likely in the data than in the algorithm.
-:::
+- **Explanations are not causal.** A SHAP bar says a value pushed the score up relative to the baseline, nothing more.
 
 ## Summary
 
