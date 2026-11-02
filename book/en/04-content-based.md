@@ -2,7 +2,7 @@
 
 It is the week before the 9.9 sale and Sari, a product manager on the marketplace's discovery team, is staring at a dashboard with one number she does not like. Every day a few hundred new products are listed by sellers: a ceramic coffee dripper from a shop in Bandung, a pair of sneakers from a brand nobody has searched for yet, a cat-food bundle that went live ten minutes ago. None of them has a single click. The popularity baselines from the previous chapter cannot see them, because popularity is *history*, and these products have none. Yet a buyer who spent last week browsing pour-over coffee gear would very probably love that dripper.
 
-What Sari needs is a recommender that can look at what an item *is*, not only at who touched it. If the dripper's title says "coffee", its category says "Coffee & Tea", and the buyer has been clicking on coffee things, then the two can be matched without a single interaction on the new product. That idea is **content-based filtering**, and it is the subject of this chapter.
+What Sari needs is a recommender that looks at what an item *is*, not only at who touched it. If the dripper's title says "coffee" and the buyer has been clicking on coffee things, the two can be matched without a single interaction on the new product. That idea is **content-based filtering**.
 
 **What you'll learn**
 
@@ -21,9 +21,9 @@ That librarian is a content-based recommender. She has two skills:
 1. She can describe every book as a short list of descriptive words (an **item representation**).
 2. She can summarise your taste as a list of the same kind of words (a **user profile**), and compare the two lists.
 
-Notice what she does not need: other readers. This is the superpower and the weakness at once. A book that arrived this morning is recommendable immediately, as soon as someone writes its cover. But she will also never surprise you. If you read three crime novels she will keep walking you to the crime shelf, forever, because nothing on a cover says "readers who like crime also secretly like gardening books".
+Notice what she does not need: other readers. That is both the superpower and the weakness: a book that arrived this morning is recommendable at once, but she will keep walking you to the crime shelf forever.
 
-In our marketplace the "covers" are the columns of the `items` table: `title`, `brand`, and the category of the item (plus its parent category, like "Electronics" or "Pets"). In a richer system they would also include descriptions, images, seller text, and attributes such as colour or size. The principle is the same.
+In our marketplace the "covers" are the `title`, `brand` and category (plus parent category) columns of the `items` table.
 
 The chapter's pipeline looks like this:
 
@@ -41,7 +41,7 @@ flowchart TB
 
 *Figure: The content-based pipeline. Item vectors are computed once; user profiles are recomputed from the latest history.*
 
-Everything in the diagram is cheap, deterministic and explainable, which is why content-based scoring remains a workhorse for "similar items" widgets and cold-start fallbacks in production systems.
+Everything here is cheap, deterministic and explainable, which is why content-based scoring remains a workhorse for "similar items" widgets and cold-start fallbacks.
 
 ## The algorithm
 
@@ -56,7 +56,7 @@ region: item_text
 
 An item titled "Volt Skincare Lokal" in category "Skincare" with brand "Volt" and parent category "Beauty" becomes the document `Volt Skincare Lokal Skincare Volt Beauty`. Note that category and brand words are repeated on purpose: titles in this simulator are short, and repeating the structured fields lets them count more than once.
 
-Once every item is a document, we need to turn the document into a vector. The most naive way is a **bag of words**: pick a vocabulary of $V$ words and for every item write down how many times each word appears. Two items are similar if they use similar words.
+Next we turn each document into a vector. The naive way is a **bag of words**: count how many times each vocabulary word appears.
 
 ### Step 2: TF-IDF weighting
 
@@ -94,7 +94,7 @@ $$
 
 Because TF-IDF vectors have no negative entries, cosine lies between 0 (no shared terms at all) and 1 (identical direction). When both vectors are already unit length, as ours are after step 2, the denominator is 1 and **cosine similarity is simply the dot product**. That is why the script can compute the similarity of every pair of items with one sparse matrix multiplication, `X @ X.T`.
 
-Why angle and not Euclidean distance? Imagine one item whose text is repeated twice, producing a vector twice as long but pointing in the same direction. Euclidean distance says it is far from the original; cosine correctly says the two are identical in meaning.
+Why angle and not Euclidean distance? A text repeated twice gives a vector twice as long but pointing the same way; cosine correctly calls it identical.
 
 ### Step 4: the user profile
 
@@ -126,7 +126,7 @@ $$
 \text{score}(u, j) = \hat{\mathbf{p}}_u \cdot \hat{\mathbf{x}}_j .
 $$
 
-Sort descending, keep the top 50 per user (the common evaluation contract defined by `book/code/common.py`), done. Users with no history at all have an all-zero profile; the script breaks their ties with a tiny popularity term so that they get the `pop_7d` list instead of an arbitrary one.
+Sort descending and keep the top 50 per user. Users with no history have an all-zero profile; the script breaks their ties with a tiny popularity term so they get the `pop_7d` list.
 
 ### A worked example by hand
 
@@ -139,7 +139,7 @@ Let us run the whole thing on a toy catalogue of four items, small enough to che
 | C | `aurora sneakers` | 1 | 0 | 1 | 0 |
 | D | `volt sneakers sneakers` | 0 | 0 | 2 | 1 |
 
-Every word occurs in exactly two of the four items, so $\text{idf} = \ln(5/3) + 1 \approx 1.511$ for all of them. (With uniform IDF, IDF scaling cancels out after normalisation; in the real catalogue IDF differs between words, as we will see below.) After L2 normalisation:
+Every word occurs in exactly two of the four items, so $\text{idf} = \ln(5/3) + 1 \approx 1.511$ for all of them and cancels out after normalisation. After L2 normalisation:
 
 - A $= (0.707,\ 0.707,\ 0,\ 0)$ and B $= (0,\ 0.707,\ 0,\ 0.707)$ and C $= (0.707,\ 0,\ 0.707,\ 0)$ (coordinates in the order aurora, coffee, sneakers, volt).
 - D has raw TF-IDF $(0,\ 0,\ 2\cdot1.511,\ 1.511)$, length $1.511\sqrt{5}$, so $\hat{\mathbf{x}}_D = (0,\ 0,\ 0.894,\ 0.447)$. The word repeated twice dominates the vector.
@@ -152,24 +152,12 @@ $$
 \mathbf{p} = \frac{1 \cdot \mathbf{x}_A + 2.5 \cdot \mathbf{x}_C}{3.5} = (0.707,\ 0.202,\ 0.505,\ 0),
 $$
 
-and after normalisation $\hat{\mathbf{p}} = (0.793,\ 0.226,\ 0.566,\ 0)$. Scores:
+and after normalisation $\hat{\mathbf{p}} = (0.793,\ 0.226,\ 0.566,\ 0)$. The scores are A 0.721, B 0.160, C 0.961 and D 0.506. C wins because it carries both of the user's strongest words; D outranks B because the sneakers signal is strong while B shares only the weak "coffee" signal. (A and C are already seen; a production system filters them out, the simple baseline here does not.)
 
-| Item | Score |
-|---|---|
-| A | 0.721 |
-| B | 0.160 |
-| C | 0.961 |
-| D | 0.506 |
-
-C scores highest because it carries both of the user's strongest words, "aurora" and "sneakers", with the heavier (order) weight on sneakers. D outranks B even though the user never saw an item named "volt": the strong sneakers signal pulls D up, while B only shares the weak "coffee" signal. (A and C are already seen; a production system would filter them out. The simple baseline in this chapter does not, which slightly depresses its measured quality.)
-
-::: tip
-Hand-calculate a tiny example like this one before trusting a library call. When your toy numbers match what `TfidfVectorizer` prints, you know you understand the normalisation and the smoothing; when they do not, the discrepancy is almost always the "+1" in IDF or the L2 step.
-:::
 
 ## Code walkthrough
 
-The full script is `book/code/ch04_content.py` (about 120 lines). We walk through it in four pieces. The snippets below are included straight from the file; they run top to bottom as one script, not as functions.
+The full script is `book/code/ch04_content.py`; the snippets below are included straight from it and run top to bottom.
 
 ### Preparing the item text
 
@@ -245,14 +233,14 @@ From the `book/` directory:
 uv run python code/ch04_content.py
 ```
 
-The first thing the script prints is a look at the text documents and the learned vocabulary:
+The script first prints the vocabulary statistics and IDF extremes:
 
 ```output
 file: results/ch04_content.txt
-lines: 2-21
+lines: 8-21
 ```
 
-Three things stand out. First, the documents are short: only 4.8 non-zero terms per item, which is a tiny amount of information. Second, the entire vocabulary is just 64 terms, because the simulator generates titles from a small template (brand + category + a suffix such as "Lokal" or "Pro"). A real marketplace has millions of distinct words, model numbers and typos. Third, the IDF ranking behaves exactly as the theory promises: "living" and "home" (shared by every item of a whole parent category) have the lowest weights, near 2.86, while "sneakers", "shampoo" and "skincare" (specific, narrow categories) have the highest, around 4.5 to 4.7.
+The documents are short (4.8 non-zero terms per item) and the vocabulary is just 64 terms, because the simulator builds titles from a template; a real marketplace has millions of words, model numbers and typos. The IDF ranking behaves as theory promises: "living" and "home" have the lowest weights, near 2.86, while "sneakers", "shampoo" and "skincare" have the highest, around 4.5 to 4.7.
 
 ## Results
 
@@ -260,10 +248,10 @@ Three things stand out. First, the documents are short: only 4.8 non-zero terms 
 
 ```output
 file: results/ch04_content.txt
-lines: 23-32
+lines: 26-32
 ```
 
-Of the 947 eval users, 919 have a usable profile, and 28 have no positive history before the cutoff, so they fall back to the popularity tie-break. For user 894, the strongest profile term is "diapers" (0.809), followed by "baby" and "mother" (both 0.301): a parent buying baby supplies. The profile is directly readable by a human, one of the great selling points of content-based methods.
+Of the 947 eval users, 919 have a usable profile; 28 have no positive history and fall back to the popularity tie-break. For user 894 the strongest term is "diapers" (0.809), followed by "baby" and "mother" (both 0.301): a parent buying baby supplies, and the profile is directly readable by a human.
 
 ### How well does it rank?
 
@@ -272,12 +260,7 @@ file: results/ch04_content.txt
 lines: 34-37
 ```
 
-To judge this number, put it next to the baselines from the previous chapter:
-
-```output
-file: results/ch03_popularity.txt
-lines: 15-22
-```
+Chapter 3 reported `pop_7d` at 0.0475 and `pop_in_my_categories` at 0.1302 on the same labels.
 
 Three conclusions:
 
@@ -289,25 +272,25 @@ Three conclusions:
 
 ```output
 file: results/ch04_content.txt
-lines: 39-60
+lines: 39-47
 ```
 
-Look at the first query. The item "Aurora Coffee & Tea Import" has a nearest neighbour with cosine **1.000**: a different item (id 2399) with exactly the same title and category. The next ones, 0.953, differ only in the suffix "Lokal", "Lite" or "Premium". The suffix word contributes so little that these items are, as far as the vector space is concerned, interchangeable.
+Look at the first query. "Aurora Coffee & Tea Import" has a nearest neighbour with cosine **1.000**: a different item (id 2399) with exactly the same title and category. The next ones, 0.953, differ only in the suffix "Lokal", "Lite" or "Premium", which contributes almost nothing.
 
-This is not a bug, but it is a teaching point. When two items have identical text, their TF-IDF vectors are identical and no content-based method can tell them apart. The marketplace has plenty of such near-duplicates: sellers copy listings, or list the same product several times. A content-only recommender will happily fill the top 5 slots with five copies of the same product from five sellers. Distinguishing between them needs *behavioural* signals (price, rating, popularity) which arrive in the learning-to-rank stage of later chapters.
+This is a teaching point, not a bug. Identical text gives identical vectors, so no content-based method can tell the items apart; a content-only recommender will happily fill the top 5 slots with copies of the same product. Telling them apart needs *behavioural* signals such as price, rating and popularity.
 
-The similarity structure is easiest to see as a picture. The heat map shows the cosine between 15 items, five from each of three categories:
+The heat map shows the cosine between 15 items, five from each of three categories:
 
 ![Cosine similarity between 15 items from three categories (Coffee & Tea, Snacks, Sneakers). Black lines separate the categories. Blocks on the diagonal are bright; everything off-diagonal is near zero.](../assets/charts/ch04-similarity-heatmap.png)
 
-The picture has three dark blocks on the diagonal: items from the same category are similar, items from different categories are not. Inside a block the shade varies a little (the "Aurora Snacks" pair is darker than the others, because they share the brand word too), but the variation is small. Numbers confirm it:
+Items of the same category are similar; items of different categories are not. Numbers confirm it:
 
 ```output
 file: results/ch04_content.txt
 lines: 62-65
 ```
 
-The rows and columns are Coffee & Tea, Snacks and Sneakers. On the diagonal the mean similarity between two *different* items in the same category is 0.752, 0.633 and 0.681; off-diagonal it is at most 0.084. (The faint light-blue squares in the heat map off the diagonal, such as between a coffee item and a snack item, come from a shared brand word like "Aurora" or "Nusa".)
+The rows and columns are Coffee & Tea, Snacks and Sneakers. The mean similarity between two different items of the same category is 0.752, 0.633 and 0.681 on the diagonal; off-diagonal it is at most 0.084. The faint squares off the diagonal come from shared brand words such as "Aurora".
 
 ::: fact
 **TF-IDF is over fifty years old.** The idea of weighting a term by the inverse of how many documents contain it was published by Karen Spärck Jones in 1972, as "a statistical interpretation of term specificity". It has been used in search engines and recommender systems ever since, and it is still a strong baseline today.
@@ -321,49 +304,31 @@ Source: Spärck Jones, Journal of Documentation, 1972
 Source: Westergren, NPR interview, 2011
 :::
 
-::: fact
-**Profiles as centroids come from the 1970s.** In the SMART retrieval system, Rocchio's relevance-feedback algorithm moved a query vector toward the centroid of the documents a user marked relevant and away from the non-relevant ones. Averaging item vectors into a user profile, as we do in this chapter, is the same geometric idea applied to recommendations.
-
-Source: Rocchio, The SMART Retrieval System, 1971
-:::
-
 ### The same idea inside the app
 
 ![The marketplace's search page for the query "coffee". Results are matched on title and category text and then sorted by popularity.](../assets/screenshots/search.png)
 
-The marketplace app already contains a tiny content-based component, and you can see it in the screenshot. When a buyer types "coffee" in the search box, the backend matches the query against product titles and category names (an `ILIKE` filter in `backend/src/catalog.rs`). That is item representation by text, with the simplest possible similarity function: "does the string occur?". The ordering of the results, "Popular", is not content-based at all. A TF-IDF or BM25 ranking would be the natural next step for search; for recommendations, the profile approach of this chapter replaces the typed query with a *query built from the user's own behaviour*.
+The app already contains a tiny content-based component: the backend matches the typed query against product titles and category names (an `ILIKE` filter in `backend/src/catalog.rs`), and the "Popular" ordering is not content-based at all. The profile approach of this chapter replaces the typed query with a *query built from the user's own behaviour*.
 
 ## Pitfalls and how it is done in production
 
 ### Over-specialisation
 
-The librarian who only reads covers keeps recommending more of the same. Our profile for user 894 is dominated by "diapers", so all 50 recommendations will be diapers or diaper-adjacent items. If that user needs a stroller or a baby bottle next, no word overlap with the history exists to suggest it. In recommender terminology the system has **no serendipity**: it cannot recommend what the user did not already show an interest in.
+The librarian who only reads covers keeps recommending more of the same. Our profile for user 894 is dominated by "diapers", so the recommendations will be diaper-adjacent; if that user needs a stroller next, no word overlap suggests it. The system has no **serendipity**.
 
-Mitigations are worth knowing, because every production system uses some of them:
-
-- **Blend with collaborative signals.** Chapter 5 introduces co-visitation, which finds that people who buy diapers also buy strollers, without any shared words.
-- **Re-rank for diversity.** Chapter 11 introduces maximal marginal relevance and category caps that limit how many items from one category may appear in the top 20.
-- **Explore deliberately.** Reserve a few slots for items outside the profile, and learn from the response.
+Mitigations: blend with collaborative signals such as co-visitation (chapter 5), re-rank for diversity with MMR and category caps (chapter 11), and reserve a few slots for exploration.
 
 ### Shallow metadata, noisy text
 
-Content-based methods are only as good as the content. In our simulator, titles are generated from a template, so the vocabulary is 64 words and the near-duplicates abound. Real catalogues have the opposite problem: seller-written titles are stuffed with keywords ("MURAH!!! Best Seller Sneakers Pria Wanita Original 100%"), misspell brand names, mix languages, and use abbreviations. Production systems clean and normalise titles, extract structured attributes (brand, colour, size) with models, and increasingly replace TF-IDF with learned embeddings from text and image encoders. Chapter 7 shows what a learned item representation looks like.
+Content-based methods are only as good as the content. Here titles come from a template; real seller titles are stuffed with keywords ("MURAH!!! Best Seller Sneakers Pria Wanita Original 100%"), misspell brands and mix languages. Production systems clean titles, extract structured attributes, and increasingly replace TF-IDF with learned text and image embeddings (chapter 7).
 
 ### The cold-start strength
 
-Here the picture turns positive. A brand-new item has no clicks, so popularity, co-visitation and matrix factorisation (chapters 3, 5, 6) cannot recommend it. But its title, brand and category exist from the first second, so a content-based scorer can place it in front of the right buyers *immediately*. This is why content similarity is a standard part of the cold-start toolkit, which we revisit in chapter 12. A new *user* with a single click is similarly well served: one click already produces a non-zero profile pointing at a category, whereas collaborative methods need many interactions before neighbours or factors become reliable.
+A brand-new item has no clicks, so popularity, co-visitation and matrix factorisation (chapters 3, 5, 6) cannot recommend it. But its title, brand and category exist from the first second, so a content-based scorer can place it in front of the right buyers *immediately*; we revisit this in chapter 12. A new *user* with a single click is similarly served: one click already yields a non-zero profile. Remember that content tells the system *where to show* an item; only real clicks tell it *whether the item is good*.
 
-::: warning
-Do not confuse "works for new items" with "works well for new items". A new item with a generic title looks like thousands of existing items and will get only a generic share of the traffic. Content features tell the system *where to show* the item; only real clicks tell it *whether the item is good*.
-:::
+### Scalability and tuning
 
-### Scalability and freshness
-
-The item matrix $X$ changes slowly (only when sellers edit listings) and can be computed offline. Profiles depend on the latest behaviour. A production implementation rarely recomputes a dense similarity matrix; it stores item vectors in an approximate-nearest-neighbour index (chapter 7) and looks up the profile vector at request time. For a fresh signal, many systems maintain the profile incrementally: on each new click, `p_new = decay * p_old + w * x_item`, which is the streaming form of the weighted mean.
-
-### Tuning the profile
-
-Three knobs matter. The *half-life* decides how quickly interests fade: a short half-life reacts quickly to a new interest but forgets stable long-term taste; a long one does the reverse. The *event weights* (click 1, cart 3, order 5 here) encode how much stronger a purchase is than a glance. And the *text recipe* (which fields, how often repeated) decides what "similar" even means. A good practice is to treat these as hyperparameters and tune them against the same time-split evaluation you use for everything else, as you will do in the hands-on exercise.
+Item vectors are computed offline and stored in an approximate-nearest-neighbour index (chapter 7); the profile is looked up at request time. Tune the half-life, the event weights and the text recipe on the same time-split evaluation as everything else; you will vary the half-life in the hands-on exercise.
 
 ### How this fits the repo's ranking system
 
@@ -375,8 +340,7 @@ The content-based score is not a retriever in the final repo pipeline; the four 
 - TF-IDF weights words by term frequency times inverse document frequency, so specific words ("sneakers") matter more than generic ones ("home"); L2 normalisation makes cosine similarity equal to a dot product.
 - A user profile is the weighted average of the vectors of items the user touched, with weights equal to event strength times exponential time decay (half-life 7 days here).
 - On the simulated marketplace the method reaches an NDCG@20 of 0.0909, almost twice the 0.0475 of `pop_7d`, but below the 0.1302 of `pop_in_my_categories`, because category and brand words cannot separate items inside a category.
-- Coverage is very high (0.9892 versus 0.0087 for popularity): content-based scoring spreads exposure over the catalogue instead of concentrating it on a few hits.
-- Near-duplicate titles produce a cosine similarity of exactly 1.0, so content alone cannot tell copies apart; behavioural signals must do that.
+- Coverage is very high (0.9892 versus 0.0087 for popularity), but near-duplicate titles have cosine similarity exactly 1.0, so content alone cannot tell copies apart; behavioural signals must.
 - The main strength is cold start (new items and new users can be scored immediately); the main weakness is over-specialisation, as the method never suggests anything unlike the history.
 - In the repo's final system, content signals are used as ranker features rather than as a standalone retriever.
 
