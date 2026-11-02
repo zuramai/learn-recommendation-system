@@ -2,19 +2,13 @@
 
 It is a Tuesday evening, a few minutes after payday, and Dewi opens the marketplace app on her phone. She taps a cat-food listing, scrolls through the photos, decides the price is a little high, and presses back. She does not buy anything. She does not "like" anything. She did not even type a word. And yet, if she returns to the home page thirty seconds later, the feed should already look a little different: more pet supplies, fewer phone cases. The page she just left has to change what the system believes about her.
 
-Every earlier chapter treated that sentence as a given. We assumed there was a table of events, that somebody had logged "Dewi viewed item 8812 for forty seconds", and that a model could read that table, build features at a cutoff, score candidates and return twenty products in well under a second. This chapter is about the somebody. It is about the plumbing that makes the loop real: a browser that notices what the shopper does, a server that writes it down without losing it, a database that holds it, a recommender that reads it back within seconds, and a web API that stitches the answer into a product grid, with a safe fallback for the day the recommender is broken.
-
-The marketplace in this repository is small, but it is not a toy in the way a notebook is a toy. It has four cooperating processes, two languages, a typed network contract, real authentication, a real checkout transaction, and a model that retrains itself. Reading it end to end is the quickest way to see where recommender-system bugs actually come from. Spoiler: far more of them come from event plumbing, time zones, race conditions and ordering than from the choice of loss function.
-
 **What you'll learn**
 
-- How the Vue frontend, the Rust/Axum API, PostgreSQL and the Python gRPC recommender divide responsibilities, and why the recommender only ever *reads* the database.
-- The life of one click, from an impression in the browser to a changed recommendation, with the code at every hop.
-- How impressions, clicks and dwell time are captured in the browser, and why the order of two `pagehide` listeners decides whether a click is recorded at all.
-- How the server turns a batch of client events into session-aware rows, and how sessions are defined by a 30-minute idle rule.
-- How the recommender keeps an in-memory copy of the database fresh with an incremental, overlap-safe refresh, and how a request flows through `Recommend`, hydration and the fallback path.
-- How one `.proto` file generates both the Rust client and the Python server, how retraining is hot-swapped, and how the "Why this?" panel is fed.
-- What the end-to-end latency of this system is today (we measure it) and what to do about it.
+- How the four processes (Vue, Rust/Axum, PostgreSQL, Python gRPC) divide responsibilities, and why the recommender only *reads* the database.
+- The life of one click, from an impression to a changed recommendation, with the code at every hop.
+- How impressions, clicks and dwell are captured, and why the order of two `pagehide` listeners decides whether a click is recorded.
+- How sessions are derived, how the recommender refreshes an in-memory copy of the database, and how hydration, fallback and retraining work.
+- How one `.proto` file generates both sides, and what the end-to-end latency is (we measure and profile it).
 
 ## The intuition: a restaurant with a ledger
 
@@ -24,9 +18,9 @@ That is exactly this architecture. The **ledger** is PostgreSQL. The **waiters**
 
 The division is deliberate, for three reasons.
 
-1. **One writer means one set of rules.** Anything that must be validated (stock never negative, an order only moves `paid → shipped → completed`, a client may not forge an `order` event) lives in exactly one place. The recommender can then trust that every row it reads was written by code that enforces the invariants.
-2. **The recommender can be wrong or down without taking the shop down.** It sits behind a network boundary with a timeout. A bug in feature code cannot corrupt orders, because it does not hold a write-capable connection. In `recsys/db.py`, `connect(read_only=True)` sets `default_transaction_read_only=on`, so an accidental `INSERT` from Python fails loudly with `ReadOnlySqlTransaction` instead of silently succeeding.
-3. **Each side uses the right tool.** Rust is a good fit for a concurrent, type-checked web API that needs transactions and predictable memory. Python is where pandas, LightGBM and the research code live. Gluing them with a typed RPC contract lets both be idiomatic.
+1. **One writer means one set of rules.** Stock never goes negative, an order only moves `paid → shipped → completed`, and a client cannot forge an `order` event, all in one place.
+2. **The recommender can be wrong or down without taking the shop down.** It sits behind a network boundary with a timeout and holds no write-capable connection: in `recsys/db.py`, `connect(read_only=True)` sets `default_transaction_read_only=on`, so an accidental `INSERT` fails loudly with `ReadOnlySqlTransaction`.
+3. **Each side uses the right tool.** Rust for a concurrent, type-checked API with transactions; Python for pandas, LightGBM and the research code.
 
 ```mermaid
 flowchart LR
@@ -38,8 +32,6 @@ flowchart LR
     A -.->|"on gRPC error:<br/>fallback query"| P
 ```
 *Figure: The four processes. Rust is the only writer; Python reads Postgres through a read-only connection and is called over gRPC.*
-
-Notice that there is no message queue, no Kafka, no feature store and no cache between the writer and the reader. The database *is* the integration point. That is a conscious choice for a system of this size and Chapter 14 discusses what replaces each piece when traffic grows by four orders of magnitude.
 
 ## The algorithm: the life of one click
 
@@ -75,14 +67,14 @@ sequenceDiagram
 
 The numbered steps:
 
-1. **Render and observe.** `ProductGrid.vue` watches the list of items it was given and calls `track({event_type: 'impression'})` once per item per grid instance, with the item's index as `position` and the surface name (`home_feed`, `search`, `similar`, `shop`) as context.
-2. **Queue and flush.** `useTracker.ts` keeps a module-level queue. It flushes when the queue reaches 20 events or 2 seconds after the first queued event, whichever comes first, with one `POST /api/events`.
-3. **Validate and persist.** The Rust handler `post_events` rejects anonymous traffic (silently, with `204`), more than 100 events per batch, and any event type other than `impression`, `click` and `hide`. It opens a transaction, asks `touch_session` for the user's current session, and inserts every event with that `session_id`.
-4. **Dwell becomes a click.** When the shopper leaves a product page, `Product.vue` emits a single `click` event whose `dwell_sec` is the time on the page. That is the strongest implicit-feedback signal in the whole system: in the model-info page, `ui_max_dwell_sec` is the top feature by gain.
-5. **Ask for recommendations.** The home page calls `GET /api/recommendations`. The Rust route builds a `RecommendRequest` and calls the Python service with a 5-second timeout.
-6. **Refresh the in-memory copy.** Before doing anything else, `Recommend` calls `Store.refresh()`, which reads only the events newer than what it has already seen.
-7. **Run the stack from Chapters 8-11.** `History.at(now)` freezes the world at the current time; retrievers produce candidates; `features.build` computes the feature frame; the LightGBM model scores; `rerank.rerank` applies caps and filters; SHAP contributions are computed for the survivors.
-8. **Hydrate and respond.** gRPC returns only item ids, scores, sources and contributions. The Rust API fetches the corresponding product cards in one query and returns JSON that the frontend renders.
+1. **Render and observe.** `ProductGrid.vue` calls `track` with an `impression` once per item per grid, with its index as `position` and the surface name as context.
+2. **Queue and flush.** `useTracker.ts` flushes at 20 queued events or 2 seconds after the first, with one `POST /api/events`.
+3. **Validate and persist.** `post_events` accepts only `impression`, `click` and `hide`, at most 100 per batch, and inserts them in one transaction with the user's current `session_id`.
+4. **Dwell becomes a click.** When the shopper leaves a product page, `Product.vue` emits one `click` carrying `dwell_sec`, the strongest implicit signal: `ui_max_dwell_sec` is the top feature by gain on the model page.
+5. **Ask.** The home page calls `GET /api/recommendations`; Rust calls the Python service with a 5-second timeout.
+6. **Refresh.** `Recommend` first calls `Store.refresh()`, which reads only events newer than what it has seen.
+7. **Run Chapters 8-11.** `History.at(now)`, candidates, `features.build`, LightGBM scoring, `rerank.rerank`, SHAP for the survivors.
+8. **Hydrate and respond.** gRPC returns ids, scores, sources and contributions; Rust fetches the cards in one query.
 
 ### A worked example with hand-sized numbers
 
@@ -92,10 +84,6 @@ $$T_\text{stale} \le T_\text{flush} + T_\text{refresh} + L.$$
 
 In this code base, `FLUSH_MS = 2000` in `useTracker.ts` and `MIN_REFRESH_SEC = 1.0` in `db.py`. Add the measured median request time later in this chapter, roughly 0.84 s, and the worst case is about $2 + 1 + 0.84 = 3.84$ seconds between "the shopper pressed back" and "the shopper sees a feed that knows about it". For a typical shopper who presses Refresh a few seconds after returning, the new item is already in the feed. That is the "recommendations are computed on request" decision from the project plan paying off: there is no nightly batch between behaviour and effect.
 
-A second tiny example concerns batching. A home page renders 20 cards, so 20 impressions are queued and the size trigger fires at once: one request, 20 rows. A search page renders 24 cards: the first 20 flush immediately, the remaining 4 sit in the queue until the 2-second timer fires. The event table in the screenshot tour below shows the same rhythm: impressions arrive in groups that share a timestamp, with the next group two seconds later.
-
-A third example is the session rule. Suppose Dewi acts at 10:00, 10:20 and 11:05. The first action creates session A. At 10:20 the latest session was last seen 20 minutes ago, inside the 30-minute window, so session A is reused and its `last_seen_at` moves to 10:20. At 11:05 the gap since 10:20 is 45 minutes, so a new session B is created. Two sessions, not three. Sessions matter because the co-visitation retriever from Chapter 5 groups items by `session_id`: if sessions were mis-assigned, "viewed together" would become noise.
-
 ::: fact
 **Why this loop cannot be left to a notebook.** In "Hidden Technical Debt in Machine Learning Systems", Sculley et al. observe that only a small fraction of a real-world ML system is the ML code itself; the surrounding infrastructure for data collection, serving and monitoring is "vast and complex". In this repository the same proportion is visible: the ranking model lives in a handful of Python files, while the collection, storage and delivery of its inputs and outputs spans a frontend, an API, a schema and an RPC contract.
 
@@ -104,22 +92,14 @@ Source: Sculley et al., NeurIPS, 2015
 
 ## Code walkthrough, part 1: capturing behaviour in the browser
 
-We now follow the click through the code. We start where the data is born.
-
 ### The tracker
 
-The tracker is a module-level singleton: a queue, a timer and three functions. Because it lives at module scope, every component that calls `track` shares the same queue, which is what allows batching across grids and views.
+`track()` first checks `if (!useAuth().user) return`: anonymous visitors generate no events (the server also answers `204` without storing), so new visitors only get trending items, the cold-start path of Chapter 12. Then comes the batching policy: send at `FLUSH_AT = 20`, otherwise start a 2-second timer. `flush()` swallows network errors on purpose: tracking is best-effort. The bottom of the region handles leaving the page, where the browser may cancel in-flight `fetch` calls; `navigator.sendBeacon` queues a small POST that the browser delivers after the page is gone. The `pageHideHooks` set carries a bug story, below.
 
 ```include
 path: frontend/src/composables/useTracker.ts
 region: tracker
 ```
-
-Read it from the top. `take()` swaps the queue for an empty one and cancels the pending timer, so a batch is never sent twice. `flush()` posts the batch with `fetch`, swallowing network errors on purpose: *tracking is best-effort*. If a shopper's phone loses signal for a second, we lose a handful of impressions; we must never break the page, retry in a loop, or show an error toast for telemetry.
-
-`track()` is the public entry. Its first line, `if (!useAuth().user) return`, is a product decision with a modelling consequence: anonymous visitors generate no events. The server also drops anonymous batches (it returns `204` without storing), so the privacy-friendly default is enforced on both sides. The cost is that new visitors have no history and the recommender can only offer trending items, the cold-start path of Chapter 12. The second half of the function is the batching policy: send immediately at `FLUSH_AT = 20`, otherwise start a 2-second timer if one is not already running.
-
-The bottom third of the region handles the hardest moment in the life of a web page: leaving it. When a tab closes or the user navigates away, the browser may cancel in-flight `fetch` requests. `navigator.sendBeacon` exists for precisely this case; it queues a small POST that the browser promises to deliver after the page is gone. We will return to the `pageHideHooks` set in a moment, because it carries a bug story.
 
 ### Impressions
 
@@ -130,9 +110,7 @@ path: frontend/src/components/ProductGrid.vue
 region: impressions
 ```
 
-Three details deserve attention. First, the `seen` set makes the rule *one impression per item id per grid instance*. Without it, a Vue re-render, a "Refresh" that returns an overlapping list, or a window resize that re-evaluates the watcher would log the same impression repeatedly and inflate the denominator of every CTR. Second, the watcher is keyed on `idsKey`, the comma-joined list of ids, not on the array object. Vue creates a new array on each fetch even when the contents are identical; keying on the ids avoids spurious fires. Third, `position` is the index in the grid at the time of render, which is the information Chapter 12 needs to correct for position bias.
-
-An honest caveat: this counts an item as "seen" when it is *rendered*, not when it is *scrolled into view*. A card on row five is logged as an impression even if the shopper never scrolls that far. Production systems use an `IntersectionObserver` with a minimum visible time. We kept the simple version because it is easy to read; the data it yields is an upper bound on exposure.
+The `seen` set enforces one impression per item id per grid instance; without it a re-render or an overlapping "Refresh" would inflate the denominator of every CTR. The watcher is keyed on the joined id list because Vue creates a new array on every fetch. And `position` is the render index, which Chapter 12 needs for position bias. Caveat: an item counts as seen when *rendered*, not when scrolled into view; production uses an `IntersectionObserver`.
 
 ### Dwell time and the `pagehide` ordering bug
 
@@ -150,9 +128,9 @@ region: dwell
 - `onPageHide(endView)`: the tab is closed or the page is reloaded.
 - `onUnmounted`: a final safety net.
 
-Here is the bug that surfaced while verifying the app by hand. The first version of the product page registered its own `window.addEventListener('pagehide', ...)` to record the click. The tracker also had a `pagehide` listener, whose job is to drain the queue into `sendBeacon`. Browsers run listeners for the same event in registration order. The tracker's module is loaded first, so its listener ran first: it emptied the queue and sent the beacon, and only then did the product page add its click to the (now empty) queue. The click was queued after the last flush opportunity and was silently lost. The symptom was subtle: clicks recorded when navigating inside the app, but never when closing the tab, so "dwell on the last product before leaving" went missing.
+The first version of the product page registered its own `pagehide` listener to record the click. The tracker's listener, which drains the queue into `sendBeacon`, was registered first and therefore ran first: it emptied the queue and sent the beacon, and only then did the product page queue its click. The click missed the last flush and was silently lost. The symptom was subtle: clicks were recorded when navigating inside the app but never when closing the tab.
 
-The fix is visible in the tracker region above: a tiny hook registry. A view that must record something at tab-close calls `onPageHide(fn)`; the tracker's single `pagehide` listener first runs every registered hook, which queue their events, and *then* takes the queue and sends the beacon. The ordering is now enforced by data flow instead of by luck of registration order. The general lesson applies to any "flush on exit" design: do not give every producer its own exit listener; give the flusher one, and let producers register with it.
+The fix is the hook registry in the tracker region: a view calls `onPageHide(fn)`, and the tracker's single `pagehide` listener runs every hook (which queue their events) and *then* sends the beacon. The general lesson for any flush-on-exit design: give the flusher one exit listener and let producers register with it.
 
 ::: fact
 **`pagehide` is not a guarantee.** MDN's documentation for `navigator.sendBeacon()` explains that the legacy exit events (`unload`, `beforeunload` and `pagehide`) are unreliable, especially on mobile: if a user switches apps and later kills the browser, none of them fire. MDN recommends sending analytics on the `visibilitychange` event instead, and notes that the beacon payload is limited to about 64 KiB. Our tracker uses `pagehide`, which is simple and good enough to demonstrate the design; a production tracker would also flush when `document.visibilityState` becomes `hidden`.
@@ -164,16 +142,14 @@ Source: Mozilla Contributors, MDN Web Docs, 2026
 
 ### The events table
 
-Everything the recommender knows about behaviour comes from one append-only table. Its schema is the contract between "what the web app can observe" and "what the model can learn from".
-
-```include
+Everything the recommender knows about behaviour comes from one append-only table, `events` in `backend/migrations/0001_init.sql`: `ts`, `user_id`, `session_id`, `item_id`, `event_type`, `position`, `dwell_sec`, `price_paid`, `surface`. ```include
 path: backend/migrations/0001_init.sql
 region: events_table
 ```
 
-Compare it with the simulator schema from Chapter 1: `ts`, `user_id`, `session_id`, `item_id`, `event_type`, `position`, `dwell_sec`, `price_paid`. Real data adds `surface` (the page the event happened on) and the foreign keys that stop a client from writing events about items that do not exist. The `CHECK` constraint on `event_type` is the database's last line of defence: whatever a buggy handler tries to insert, only the six known types can land in the table. Two indexes serve the two access patterns we need: per-user history, `(user_id, ts DESC)`, and per-item aggregates, `item_id`. The recommender's incremental refresh reads by primary-key order, which the `BIGSERIAL` index already provides.
+Its schema is the contract between "what the web app can observe" and "what the model can learn from".
 
-Note the absence of an `UPDATE` anywhere. Append-only logs are easy to reason about, easy to replay, and easy to turn into training data later. Returns are modelled as a new `return` event, not as a modification of an `order` row.
+Compared with the simulator schema of Chapter 1, real data adds `surface` and foreign keys that stop a client from writing events about nonexistent items. The `CHECK` on `event_type` is the last line of defence, and two indexes serve per-user history and per-item aggregates. There is no `UPDATE` anywhere: the log is append-only, and a return is a new `return` event.
 
 ### From batch to rows: `post_events`
 
@@ -182,9 +158,9 @@ path: backend/src/events.rs
 region: post_events
 ```
 
-The handler is only about thirty lines, but each line encodes a rule. `MaybeUser(user)` is an extractor that never fails: anonymous requests reach the handler and are told `204 No Content`, exactly what a well-behaved beacon expects. The batch limit of 100 stops a runaway client from filling a transaction. The `matches!` check enforces *what a browser is allowed to claim*: impressions, clicks and hides are observations of the shopper's own screen, so the client may report them. `add_to_cart` and `order` are different. They are consequences of authenticated server-side actions (adding to a cart, running checkout), so the API creates them itself and refuses to accept them from the network. If a shopper could post `order` events directly, they could train the recommender to love any item, including their own listings.
+`MaybeUser` never fails, so anonymous requests get `204`, which is what a beacon expects. The `matches!` check enforces what a browser may claim: impressions, clicks and hides are observations of the shopper's own screen. `add_to_cart` and `order` are consequences of authenticated server-side actions, so the API creates them itself; if a shopper could post `order` events, they could train the recommender to love any item.
 
-Then the transaction. One `touch_session` call resolves the session for the whole batch, using the surface of the first event. Every event in the batch goes in with that `session_id`. A foreign-key violation becomes a clean `400 unknown item` rather than a 500, and `tx.commit()` makes the whole batch visible atomically. Atomicity matters for the recommender: it will never see half of a batch.
+One `touch_session` call resolves the session for the whole batch; a foreign-key violation becomes `400 unknown item`; and `tx.commit()` makes the batch visible atomically, so the recommender never sees half of one.
 
 ### Sessions: `touch_session`
 
@@ -195,11 +171,16 @@ path: backend/src/sessions.rs
 region: touch_session
 ```
 
-The SQL is a single `UPDATE ... WHERE id = (SELECT ... LIMIT 1) RETURNING id`. It selects the user's most recently active session that was seen within the last 30 minutes, bumps its `last_seen_at` to `now()`, and returns its id, all in one round trip. If it returns nothing, the function inserts a new session. A user with two browser tabs, or a click and a checkout a minute apart, will therefore share one session, which is what we want for co-visitation.
+One `UPDATE ... WHERE id = (SELECT ... LIMIT 1) RETURNING id` finds the latest session seen within 30 minutes, bumps `last_seen_at` and returns its id; otherwise a new session is inserted. Two concurrent requests could in theory both insert one; we accept that, since it only slightly dilutes co-visitation. Every server-side event (client batches, `add_to_cart`, `order`) goes through this function, because the co-visitation matrix depends on a valid `session_id`.
 
-There is a classic race here: two requests from the same user arriving in the same millisecond could both find no live session and both insert one. We accept that: the worst outcome is two sessions that are a few milliseconds apart, which only slightly dilutes co-visitation, and a stronger guarantee would require an advisory lock on the user id. Knowing where you accept an imperfection, and why, is part of production practice.
+### Checkout: the strongest signal
 
-Every server-side event goes through this same function: client batches, the `add_to_cart` event written by `POST /cart`, and the `order` events written inside checkout. This is a rule worth enforcing by code review: never insert an event without a valid `session_id`, because the co-visitation matrix depends on it.
+This is the best example of why a single writer pays off. In one transaction the handler loads the cart, locks the item rows with `SELECT ... FOR UPDATE ORDER BY id` (a deterministic order prevents deadlocks), rejects inactive or short-stock lines with `409`, groups lines by shop into one order per seller, stores `unit_price` at the final discounted price, decrements stock and stamps `out_of_stock_at` at zero, writes one `order` event per line through `touch_session`, and empties the cart. Two recommender-relevant consequences: the next `Recommend` stops proposing a sold-out product because `History.at` reads `out_of_stock_at`, and every `order` event corresponds to a real, paid order row.
+
+```include
+path: backend/src/cart.rs
+region: checkout
+```
 
 ## Code walkthrough, part 3: the recommender reads it back
 
@@ -214,14 +195,7 @@ symbol: Store.refresh
 
 `refresh()` does three things. It takes a lock, so concurrent gRPC threads do not issue overlapping refreshes. It applies a throttle: if the last refresh was less than `MIN_REFRESH_SEC` (one second) ago, it returns immediately, which caps database load at roughly one refresh per second no matter how many requests arrive. And it retries once on `OperationalError` after dropping the connection, which is what you want after a Postgres restart.
 
-```include
-path: recommender/recsys/db.py
-symbol: Store._refresh
-```
-
-`_refresh()` reloads the four small tables (categories, shops, items, users) in full, because they change in place: a seller edits a price, stock reaches zero, a new item is listed. The two large append-only tables, events and searches, are fetched incrementally: `WHERE id > last_id - 1000`. The 1000-id overlap is the subtle part. A `BIGSERIAL` id is assigned when a row is *inserted*, but a row becomes *visible to other connections* when its transaction *commits*. Suppose transaction X inserts event 500, transaction Y inserts event 501 and commits first, and the recommender refreshes in between. It sees 501 and sets `last_id = 501`; when X commits, a naive `id > 501` query would never fetch event 500. By re-reading the last 1000 ids and de-duplicating with `drop_duplicates(subset=key, keep="last")` in `_merge`, the store tolerates commits that arrive out of order, at the cost of reading a few extra rows. The 1000 is a rule of thumb: it must be larger than the number of rows that can be inserted while the slowest transaction is still open.
-
-Observe also that all four read queries run on a read-only connection, and that `_merge` sorts by `ts` with a stable sort: `History.at` assumes time-ordered events.
+The four small tables (categories, shops, items, users) are reloaded in full because they change in place. Events and searches are fetched with `WHERE id > last_id - 1000`. The overlap matters because a `BIGSERIAL` id is assigned at *insert* but the row becomes visible at *commit*: if transaction Y commits event 501 before X commits event 500, a naive `id > 501` query would never fetch 500. Re-reading the last 1000 ids and de-duplicating in `_merge` (which also sorts by `ts`, as `History.at` assumes) tolerates out-of-order commits. All reads use the read-only connection.
 
 ### The `Recommend` RPC
 
@@ -230,52 +204,31 @@ path: recommender/recsys/service.py
 region: recommend_rpc
 ```
 
-This method is the whole chapter in miniature. It refreshes the store, clamps `k` to 1..50 (never trust a caller's page size), and takes a reference to the current model and version *before* doing any work: `model, version = self.model, self.meta["version"]`. That one line is what makes hot-swapping safe, as we will see in a moment. Then it calls `pipeline.recommend`, the same function the offline CLI uses, with `now` as the cutoff. This is not an accident: the offline evaluation and the online service share one code path, which is the best defence against training/serving skew.
-
-`source_of(recs)` labels each row with the retriever that proposed it with the largest score (`recent`, `covisit`, `category_popular`) or `trending` when none of them did. `ranker.contributions` returns the five largest SHAP contributions per row. Both are packaged in protobuf messages. The method ends by timing itself and logging one INFO line with the user id, `k`, candidate count and latency, the line you will tail in a terminal while using the app.
-
-Anonymous users (`user_id = 0`) need no special branch: they have no history, so the retrievers return only trending items and the user-level features are missing, which LightGBM handles natively as NaN. That is why the anonymous home page in the screenshot tour shows exactly 30 candidates, which is the minimum in our latency run too.
+The method refreshes the store, clamps `k` to 1..50, and takes references to the current model and version *before* any work, which makes hot-swapping safe. It then calls `pipeline.recommend`, the same function the offline CLI uses: offline evaluation and online serving share one code path, the best defence against training/serving skew. `source_of` labels each row with its strongest retriever (or `trending`), `ranker.contributions` adds the top five SHAP values, and one INFO log line records user, `k`, candidates and latency. Anonymous users (`user_id = 0`) need no special branch: no history means trending candidates and NaN user features, which LightGBM handles.
 
 ### Retraining without downtime
 
-A model trained once is a model that is already ageing. New items appear, tastes shift with payday and flash sales, and the ranker's features such as `item_impressions_7d` drift. The service therefore supports two retrain triggers: a background thread that fires every `RECSYS_RETRAIN_INTERVAL_SEC` (six hours by default), and an admin-only gRPC `Retrain` call surfaced as a button on the "How it works" page.
+The ranker's inputs drift as items appear and tastes shift, so the service retrains on two triggers: a background thread every `RECSYS_RETRAIN_INTERVAL_SEC` (six hours by default) and an admin-only gRPC `Retrain` call behind a button on the "How it works" page.
 
 ```include
 path: recommender/recsys/service.py
 symbol: retrain
 ```
 
-The module-level `retrain` function is shared by the service and the CLI (`uv run recsys retrain`). It trains on a snapshot of the store with `end=now`, so the label windows slide forward with the clock: the training set always ends "now minus 14 days to now minus 7 days" and the evaluation window is the last seven days. It converts the evaluation table into flat metric keys such as `lightgbm_ranker/ndcg@20`, writes `ranker.txt` and a `model_meta.json` containing the version, timestamp, metrics and feature importances, and returns the new objects without touching global state.
+The module-level `retrain` is shared by the service and the CLI. It trains on a store snapshot with `end=now`, so label windows slide with the clock, converts the evaluation table into flat keys such as `lightgbm_ranker/ndcg@20`, and writes `ranker.txt` and `model_meta.json`.
 
-```
-
-```include
-path: recommender/recsys/service.py
-symbol: RecommenderService.retrain
-```
-
-`RecommenderService.retrain` wraps the function with two safeguards. First, `retrain_lock.acquire(blocking=False)`: if a retrain is already running, a second request fails immediately with `RuntimeError`, which the RPC maps to `ABORTED` and Rust maps to HTTP `409 retrain already running`. Two simultaneous retrains would waste minutes of CPU and race to write the same files. Second, the swap `self.model, self.meta = model, meta` is two reference assignments. In-flight `Recommend` calls hold their own reference to the old booster (recall the first line of the RPC), so they finish with a consistent model/version pair, and new calls see the new one. No lock on the read path, no pause in traffic.
-
-::: fact
-**Real-time learning is a research topic of its own.** The Monolith system, from ByteDance, argues that general-purpose training frameworks fall short for recommendation because they separate a batch-training stage from a serving stage, which prevents the model from interacting with customer feedback in real time. Its authors describe an online-training architecture with a collisionless embedding table, and show that reliability can be traded off for real-time learning. Our six-hour retrain interval sits at the opposite, much simpler end of that spectrum.
-
-Source: Liu et al., ORSUM Workshop (RecSys), 2022
-:::
+The method adds two safeguards. `retrain_lock.acquire(blocking=False)` makes a second concurrent request fail at once (`ABORTED`, which Rust maps to `409`). And the swap `self.model, self.meta = model, meta` is two reference assignments: in-flight `Recommend` calls keep the old booster and finish consistently, new calls see the new one, with no lock on the read path.
 
 ## Code walkthrough, part 4: the Rust side of the bridge
 
 ### The recommendations route
-
-Now the other end of the gRPC call.
 
 ```include
 path: backend/src/recommender.rs
 region: recommend_route
 ```
 
-The handler reads the user from the cookie, if any (`MaybeUser`), clamps `k`, and builds the request. `st.rec.clone()` clones the *client handle*, which is cheap: tonic channels multiplex many calls over one HTTP/2 connection, and in `main.rs` the channel is created with `connect_lazy()`, so the API starts even when Python is down. The call is wrapped in `tokio::time::timeout(Duration::from_secs(5), ...)`. The match has two arms of interest: a successful reply is hydrated and returned with `"fallback": false`; anything else, whether a gRPC error or a timeout, is logged as a warning and answered from the fallback query with `"model_version": "fallback"`. The frontend reads that flag to display the yellow banner "Recommender offline — showing popular items".
-
-This is the standard contract of a recommender in production: *degraded is better than down*. The route never returns a 5xx just because the model service is unavailable.
+The handler reads the optional user, clamps `k` and builds the request. The `connect_lazy()` channel in `main.rs` lets the API start even when Python is down. The call is wrapped in a 5-second `tokio::time::timeout`; success is hydrated and returned with `"fallback": false`, while any gRPC error or timeout is logged and answered from the fallback query with `"model_version": "fallback"`, which the frontend turns into the yellow banner. Degraded is better than down.
 
 ### Hydration
 
@@ -286,7 +239,7 @@ path: backend/src/recommender.rs
 region: hydrate
 ```
 
-One SQL query with `id = ANY($1)` builds a map from id to card; the code then walks the recommender's list *in the recommender's order*, skipping ids that vanished in the meantime (a seller deactivated a listing a second ago). The response may hold fewer than `k` cards, which is better than failing the whole feed.
+One SQL query with `id = ANY($1)` builds an id-to-card map, and the code walks the recommender's list *in the recommender's order*, skipping ids that vanished meanwhile. Fewer than `k` cards beats failing the whole feed.
 
 ### The fallback
 
@@ -295,32 +248,22 @@ path: backend/src/recommender.rs
 region: fallback
 ```
 
-This is the printed card from our restaurant: active, in-stock items ordered by `order` events in the last seven days, then by rating count. It reuses the catalogue's card SQL and labels every row `source: "trending"`, score 0, no contributions, so the frontend needs no separate rendering path. It is deliberately non-personalised: a degraded experience that is the same for everybody cannot be wrong in a surprising, user-specific way.
-
-### Checkout: the strongest signal
-
-```include
-path: backend/src/cart.rs
-region: checkout
-```
-
-This is the best example of why a single writer pays off. In one transaction the handler loads the cart, locks the item rows with `SELECT ... FOR UPDATE ORDER BY id` (a deterministic order prevents deadlocks), rejects inactive or short-stock lines with `409`, groups lines by shop into one order per seller, stores `unit_price` at the final discounted price, decrements stock and stamps `out_of_stock_at` at zero, writes one `order` event per line through `touch_session`, and empties the cart. Two recommender-relevant consequences: the next `Recommend` stops proposing a sold-out product because `History.at` reads `out_of_stock_at`, and every `order` event corresponds to a real, paid order row.
+The printed card from our restaurant: active, in-stock items ordered by `order` events in the last seven days, then rating count. It labels every row `source: "trending"`, score 0, no contributions, so the frontend needs no separate path. It is deliberately non-personalised: a degraded experience that is the same for everybody cannot be wrong in a surprising, user-specific way.
 
 ## The contract between languages: one `.proto`, two code generators
 
-The Rust API and the Python service never share code, only a schema. The schema is a single file, and it is short enough to read in full.
+The Rust API and the Python service share only a schema, one short file:
 
 ```include
 path: proto/recommender.proto
 ```
 
-The file defines four RPCs and their messages. The pieces map directly to the product:
+The pieces map directly to the product:
 
-- `Recommend` powers the home feed; `SimilarItems` powers the product page; both return `RecommendResponse`, which carries `items`, the `model_version` that produced them, the number of `candidates_considered`, and the server-measured `latency_ms`. These last three fields are what the grey caption under "Recommended for you" displays.
-- `RecommendedItem.contributions` carries the top five SHAP contributions per item: feature name, the feature's value and its signed contribution to the score. This is the raw material of the "Why this?" panel.
-- `Retrain` returns the new version, the metrics map and the number of training rows. `ModelInfo` returns everything the "How it works" page needs: feature descriptions, gain shares, metrics, event counts.
-
-Design the contract as you would a public API. Responses carry the *model version* so you can correlate any observed behaviour with the model that caused it. IDs, not objects, cross the boundary: the recommender never has to know how a product is rendered, and the API never has to know how a score is computed. The request carries `surface` even though today's model ignores it: when you later want a different ranker for search than for home, the field is already there. A `user_id` of 0 means "anonymous", a convention that must be documented on the contract, and is, in a comment.
+- `Recommend` and `SimilarItems` return `RecommendResponse` with `items`, `model_version`, `candidates_considered` and `latency_ms`, the numbers in the grey caption under "Recommended for you".
+- `RecommendedItem.contributions` carries the top five SHAP contributions per item: the raw material of "Why this?".
+- `Retrain` and `ModelInfo` feed the "How it works" page.
+IDs, not objects, cross the boundary, and the response carries the model version so any behaviour can be tied to the model that caused it.
 
 ::: fact
 **Field numbers are the wire format.** In Protocol Buffers, each field is identified on the wire by its number, not its name. The language guide states that the number cannot be changed once the message type is in use, that field numbers 1 through 15 take one byte to encode while 16 through 2047 take two, and that numbers of deleted fields should be reserved so they are never reused. In `recommender.proto`, the most frequently populated fields such as `item_id` and `score` therefore sit at the low numbers.
@@ -330,13 +273,13 @@ Source: Google, Protocol Buffers Language Guide (proto 3), 2026
 
 ### Generating code on both sides
 
-Rust generates its client at build time. The build script is the whole file:
+Rust generates its client at build time:
 
 ```include
 path: backend/build.rs
 ```
 
-`tonic_prost_build::configure().build_server(false)` generates only the client half (the Rust crate never *implements* the service), and `rerun-if-changed` makes Cargo rebuild when the proto changes. The generated module is pulled in by `tonic::include_proto!("recommender.v1")`, and from then on `pb::RecommendRequest` and `recommender_client::RecommenderClient` are ordinary, fully type-checked Rust items. A typo in a field name is a compile error, not a runtime surprise.
+`build_server(false)` generates only the client half, `rerun-if-changed` rebuilds on proto changes, and `tonic::include_proto!("recommender.v1")` pulls in typed items such as `pb::RecommendRequest`. A typo in a field name is a compile error, not a runtime surprise.
 
 Python generates its stubs with one command, wrapped as a CLI subcommand so nobody has to remember the flags:
 
@@ -344,13 +287,11 @@ Python generates its stubs with one command, wrapped as a CLI subcommand so nobo
 cd recommender && uv run recsys gen-proto
 ```
 
-It runs `grpc_tools.protoc` with `-I recsys/pb=../proto`, which makes the generated import read `from recsys.pb import recommender_pb2`, and writes `recommender_pb2.py` and `recommender_pb2_grpc.py`. These files are committed, so someone who only wants to run the service does not need a codegen step. The cost of committing generated code is the risk of forgetting to regenerate after editing the proto; the cost of not committing it is an extra setup step for every reader. For a teaching repository, the first is the better trade.
-
-The discipline that makes this work is simple: *the `.proto` is the only place a field is ever defined.* If you rename `candidates_considered`, both builds break loudly on the next compile or import, and you fix both sides in the same commit.
+`grpc_tools.protoc` with `-I recsys/pb=../proto` makes the generated import read `from recsys.pb import recommender_pb2`. The stubs are committed, so running the service needs no codegen step; the price is remembering to regenerate after editing the proto, a fair trade for a teaching repository.
 
 ## Run it
 
-Everything so far could be a story. The next step is to measure the system. The script `ch13_latency.py` talks to the *running* gRPC service directly, bypassing Rust and the browser, and calls `Recommend` with `k = 20` for 200 random users with a fixed seed. The first call is a warm-up and is not counted.
+The script `ch13_latency.py` calls the *running* gRPC service directly (bypassing Rust and the browser) with `Recommend`, `k = 20`, for 200 random seeded users; the first call is a warm-up and is not counted.
 
 ```bash
 # terminal A
@@ -363,7 +304,7 @@ cd book && uv run python code/ch13_latency.py
 file: results/ch13_latency.txt
 ```
 
-The first table reports two views of the same calls. "server latency_ms" is the number the service measured about itself, from the start of the RPC to just before the response was built. "client wall ms" is what the Python client measured around the whole call, including serialisation and the loopback network hop. The two differ by only about a millisecond, which tells us that the network and protobuf cost on a local machine are negligible: essentially all the time is inside the recommender. The last two lines show that every request scored between 30 and 129 candidates, 102 on average, and returned exactly 20 items.
+"server latency_ms" is the service's own measurement; "client wall ms" adds serialisation and the loopback hop. They differ by about a millisecond, so essentially all the time is inside the recommender. Every request scored between 30 and 129 candidates and returned exactly 20 items.
 
 Where do 840 ms go? The second script, `ch13_profile.py`, runs offline on the simulated data through the very same `pipeline.recommend` path, timing each stage for three users with very different histories (median of 7 runs). It needs no running services:
 
@@ -375,7 +316,7 @@ cd book && uv run python tools/run_all.py --only ch13_profile
 file: results/ch13_profile.txt
 ```
 
-Read the per-user table first: totals of 757 to 804 ms, in line with the live service, for users with 4, 22 and 133 interactions. `History.at` costs about 14 ms, `generate` about 234 to 254 ms and `features` about 490 to 544 ms, while `score`, `rerank` and `shap` together are a handful of milliseconds. The second block shows why the user hardly matters: `covisitation_matrix` (26 ms) and `item_features` (139 ms) are computed over the whole catalogue on every request, and the work around them (aggregations over all events) is of the same kind. The model is the cheap part.
+The per-user table shows totals of 757 to 804 ms for users with 4, 22 and 133 interactions. `History.at` costs about 14 ms, `generate` 234 to 254 ms and `features` 490 to 544 ms; `score`, `rerank` and `shap` together are a few milliseconds. `covisitation_matrix` (26 ms) and `item_features` (139 ms) are catalogue-wide work recomputed on every request. The model is the cheap part.
 
 ## Results
 
@@ -385,19 +326,17 @@ Read the per-user table first: totals of 757 to 804 ms, in line with the live se
 
 The histogram shows a compact body between about 770 and 900 ms, and a short tail reaching about 1,010 ms. The median is 839.9 ms, the 90th percentile 892.5 ms and the 99th 985.0 ms. Two observations matter.
 
-First, **latency barely depends on the user**. A user with 30 candidates and a user with 129 candidates sit in the same band. The stage profile in "Run it" explains why: it times each stage of `pipeline.recommend` for a light, a median and a heavy user on the simulated catalogue, and `generate` plus `features.build` account for 97% of the request on average, with candidate counts of 95 to 112 whatever the user's history. Inside them sit the catalogue-wide computations (`covisitation_matrix` and `item_features`) that are recomputed on every call, independent of who is asking. Scoring, re-ranking and SHAP together take roughly ten milliseconds.
+First, **latency barely depends on the user**. The profile explains it: `generate` plus `features.build` take 97% of the request on average, candidate counts are 95 to 112 whatever the history, and the catalogue-wide frames inside them are recomputed on every call. Scoring, re-ranking and SHAP take about ten milliseconds together.
 
-Second, **0.84 s is fine for a demo and too slow for a real home page**. The Rust route allows 5 s, so even the slowest observed call of 1,010.6 ms uses about a fifth of the budget, but a shopper waiting nearly a second for a feed will notice. The remedy was already planned: cache the item-level frames (the co-visitation matrix and item features) with a short TTL such as 30 seconds and recompute only the user-specific parts per request, accepting that item-level statistics may lag by up to that TTL while the shopper's *own* clicks remain live. We leave it as an optimisation exercise because it shows an important truth about recommender latency: the budget is eaten by feature computation, not by the model. Scoring a hundred rows with a gradient-boosted tree takes milliseconds.
+Second, **0.84 s is fine for a demo and too slow for a real home page**. Even the slowest observed call (1,010.6 ms) uses about a fifth of the 5-second budget, but a shopper will notice. The obvious fix, also the plan's contingency, is to cache the item-level frames (co-visitation matrix and item features) for about 30 seconds and recompute only user-specific parts per request; item statistics then lag by up to 30 s while the shopper's *own* clicks stay live.
 
 ### A screenshot tour
 
-The screenshots below come from the running application, captured with Playwright against the same seeded database. The other pages follow the same pattern: login verifies an Argon2 hash and sets a JWT in an `httpOnly` cookie; search is plain SQL `ILIKE` that writes `searches` rows; the product page loads its detail and `/products/:id/similar` separately, so a failing recommender never blocks the page; cart, checkout and orders exercise the writer side; the Seller Center shows a seller's products and the paid orders they must ship, and a freshly listed product there is the cold-start case of Chapter 12.
+The screenshots come from the running application, captured with Playwright. The other pages follow the same pattern: login sets a JWT in an `httpOnly` cookie; search is plain SQL `ILIKE` that writes `searches` rows; the product page loads `/products/:id/similar` separately, so a failing recommender never blocks it; cart, checkout and orders exercise the writer side; and a freshly listed product in the Seller Center is the cold-start case of Chapter 12.
 
 ![A product page with an Add to cart button and a grid of similar items](../assets/screenshots/product-similar.png)
 
 ![The shopping cart with one line, subtotal, shipping and a Checkout button](../assets/screenshots/cart.png)
-
-![The orders page listing paid orders with line items and totals](../assets/screenshots/orders.png)
 
 ![Seller Center, Orders tab: paid orders with Mark shipped buttons](../assets/screenshots/seller-orders.png)
 
@@ -409,13 +348,13 @@ The screenshots below come from the running application, captured with Playwrigh
 
 ![The Why this? panel on the first recommendation](../assets/screenshots/why-this.png)
 
-**The model page.** "How it works" shows the live event table (the same rows the recommender reads), then the model section: version, events loaded, the metric table for the four methods, candidate recall and the top features by gain, with `ui_max_dwell_sec` first. Admins also get a "Retrain now" button; after a retrain the version, metrics and training-row count differ slightly even though no code changed, because every cutoff is relative to `now` and the label windows slide with the clock.
 
-![The model section of the How it works page: version, metrics per method, candidate recall and top features](../assets/screenshots/how-it-works-model.png)
 
 ![The live events table on the How it works page: order, click with dwell, impressions by surface and position](../assets/screenshots/how-it-works-events.png)
 
-![The admin retrain panel: new model version, rows trained on and metrics](../assets/screenshots/admin-retrain.png)
+**The model page.** "How it works" shows the live event table (the same rows the recommender reads), then the model section: version, events loaded, the metric table for the four methods, candidate recall and the top features by gain, with `ui_max_dwell_sec` first. Admins also get a "Retrain now" button; after a retrain the version, metrics and training-row count differ slightly even though no code changed, because every cutoff is relative to `now` and the label windows slide with the clock.
+
+![The model section of the How it works page: version, metrics per method, candidate recall and top features](../assets/screenshots/how-it-works-model.png)
 
 **Degraded mode.** With the recommender stopped, the yellow banner replaces the model caption, cards come from the fallback query, and the "Why this?" panels are empty because trending items have no contributions. The user is slightly worse off; nobody is locked out.
 
@@ -423,29 +362,11 @@ The screenshots below come from the running application, captured with Playwrigh
 
 ## Pitfalls and production practice
 
-**Event time versus server time.** `events.ts` defaults to the database's `now()` at insert. A client-side timestamp would let a skewed phone clock write events from the future into the recommender's history. Using server time is simple and safe, and the cost is that a batch flushed late is stamped with the flush time, not the click time. For a 2-second flush window that error is irrelevant; for an offline-first mobile app that batches events for minutes, it is not, and you would need server-validated client timestamps.
+**Event time versus server time.** `events.ts` defaults to the database's `now()`: a client timestamp would let a skewed phone clock write events from the future. The cost is that a late-flushed batch is stamped with the flush time, irrelevant for a 2-second window but not for an offline-first app.
 
-**Never trust the client's event vocabulary.** We enforce `impression | click | hide` at the API and the schema. The same principle applies to numbers: `dwell_sec` comes from the browser, so a robust pipeline clips it (a tab left open overnight reports hours of dwell) before it becomes a feature. Consider `ui_max_dwell_sec`, the top feature in the model: a single bogus dwell value would immediately distort it.
+**Training/serving skew.** The service calls `pipeline.recommend` and the training job calls `pipeline.train_and_evaluate`; both use `History.at` and `features.build`. One implementation per feature, not two; a feature store (Chapter 14) industrialises this.
 
-**Feedback loops start here.** The tracker records what was *shown*, and what is shown depends on what the model recommended, which depends on what was clicked. Impressions with positions are what make later correction possible. If you logged only clicks you could never tell "ignored" from "never shown". Chapter 12 uses exactly this log to measure position bias.
-
-**Idempotency and double counting.** A beacon sent on `pagehide` and an in-flight `fetch` from the same page could, in theory, deliver the same events twice. We tolerate that because the queue is emptied by `take()` before sending, so a batch exists in exactly one place at a time. In a system where duplicate events are harmful, give each event a client-generated UUID and deduplicate on the server.
-
-**Training/serving skew.** The service calls `pipeline.recommend`; the training job calls `pipeline.train_and_evaluate`; both build features with `History.at` and `features.build`. There is one implementation of each feature, not two. The moment a team writes the feature once in SQL for training and once in application code for serving, the two will diverge. A feature store (Chapter 14) is the industrialised version of "one definition, two consumers".
-
-**Stale and mismatched models.** The response carries `model_version` and the log line carries latency and candidate counts. In production you would also log the *recommended list* with the model version, so that an A/B test or an incident analysis can recover exactly what each shopper saw.
-
-**Latency budgets.** At scale you do not have 840 ms. A typical request budget for a home feed is a few hundred milliseconds in total, and each stage (retrieval, features, ranking, re-ranking, hydration) is given a slice. We saw the right instinct above: measure the percentiles, find the fixed cost, cache what can be cached, and keep the personalised work small.
-
-**Read-only is a feature, not a limitation.** Connecting the recommender with `default_transaction_read_only=on` means that even a bug cannot damage the system of record. It also keeps the architecture honest: if you ever feel the need for the recommender to write to the application database, ask whether the data belongs in a separate store (for example, a table of precomputed candidates) rather than mixed with the transactional tables.
-
-::: tip
-**Debug with the whole stack in view.** When a recommendation looks wrong, check in this order: (1) is the event in the table (`select ... from events where user_id = 43 order by id desc`)? (2) did `Store.refresh` see it (the service log shows candidate counts)? (3) which source proposed the item (the "Why this?" panel)? (4) what features pushed it up? Four questions, four tools, no guessing.
-:::
-
-::: warning
-**Do not "fix" a missing event by writing it from the server on a hunch.** If a click is missing, find out *why* it was missed. The `pagehide` bug above was found because clicks on the last product before closing a tab were absent; the root cause was ordering, and the fix was a hook registry. Inserting synthetic events would have hidden the bug and polluted the training data.
-:::
+**Latency budgets.** At scale you do not have 840 ms; each stage gets a slice of a few hundred milliseconds. Measure percentiles, find the fixed cost, cache what can be cached, keep personalised work small.
 
 ## Summary
 
