@@ -142,7 +142,9 @@ def main() -> None:
                 b = perm[s0 : s0 + BATCH]
                 u, i = p_u[b], p_i[b]
                 h = t_hist[u].clone()
+                # book:start leak_mask
                 h[h == i[:, None]] = model.pad  # hide the target item from its own history (no leakage)
+                # book:end leak_mask
                 uv = model.user_vec(u, h, t_aff[u])
                 iv = model.item_vec(i, t_cat[i], t_brand[i], t_bucket[i])
                 logits = uv @ iv.T / TEMP
@@ -223,12 +225,14 @@ def main() -> None:
     for n_probe in (1, 2, 4, 8, 16):
         t0 = time.perf_counter()
         rec_hits, scanned = [], []
+            # book:start ivf_search
         for qi, ex in zip(q, exact):
             probe = np.argsort(-(cent @ qi))[:n_probe]
             cand = np.concatenate([members[c] for c in probe])
             top = cand[np.argsort(-(V[cand] @ qi))[:20]]
             rec_hits.append(len(set(top) & set(ex)) / 20)
             scanned.append(len(cand))
+            # book:end ivf_search
         ms = (time.perf_counter() - t0) / len(q) * 1000
         row = {"n_probe": n_probe, "recall_vs_brute_force@20": float(np.mean(rec_hits)),
                "ms_per_query": ms, "items_scanned": float(np.mean(scanned)),
