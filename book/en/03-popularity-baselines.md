@@ -226,35 +226,27 @@ symbol: recs_from_scores
 
 The `kind="stable"` sort matters. Many items have identical scores (zero, typically), and an unstable sort could return a different tie order on each run, which would make results irreproducible. With a stable sort, ties are broken by item order, so the output is deterministic.
 
-Now the scorers themselves. The first three are nearly one-liners (this is an excerpt of the script, which sits at module level):
+Now the scorers themselves. The first three are nearly one-liners (they sit at module level in the script):
 
-```python
-pop_all = per_item(pos.groupby("item_id")["w"].sum())
-scores["pop_all_time"] = pop_all
-
-pop7 = per_item(candidates.item_popularity(hist, 7))
-scores["pop_7d"] = pop7
-
-w_decay = pos["w"] * np.power(0.5, pos["age_days"] / HALF_LIFE)
-pop_decay = per_item(w_decay.groupby(pos["item_id"]).sum())
-scores["pop_decay"] = pop_decay
+```include
+path: book/code/ch03_popularity.py
+region: ch03_scores
 ```
 
 The decayed variant repeats the `_decay` formula inline instead of importing the private helper, so that the chapter's script is self-contained. The Bayesian average operates on the catalogue's `rating_avg` and `rating_count` columns:
 
-```python
-v, R = items["rating_count"].to_numpy(float), items["rating_avg"].to_numpy(float)
-m = v.mean()
-C = float((R * v).sum() / v.sum())
-bayes = v / (v + m) * R + m / (v + m) * C
+```include
+path: book/code/ch03_popularity.py
+region: ch03_bayes
 ```
 
 Two choices are worth discussing. The prior strength $m$ is set to the *mean number of ratings per item*, a common heuristic: at an average-sized sample, the evidence and the prior count equally. The global mean $C$ is weighted by $v$, so it is the mean over all *ratings*, not the mean of item means. Both are cheap to compute and need no tuning.
 
 Finally the personalised version. It builds a user × category matrix `A` from `category_affinity`, an item-wise matrix `P` of within-category normalised popularity, and multiplies them:
 
-```python
-scores["pop_in_my_categories"] = A @ P + 1e-6 * pop7 / max(pop7.max(), 1e-9)
+```include
+path: book/code/ch03_popularity.py
+region: ch03_personal
 ```
 
 `A` has one row per evaluation user and one column per category; `P` has one row per category and one column per item, and is non-zero only where the item belongs to the row's category. The matrix product therefore gives, for each user and item, exactly $s_{u,c(i)}\,\tilde p(i)$. The trailing term is the tie-breaker described earlier.

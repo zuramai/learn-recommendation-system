@@ -38,6 +38,7 @@ scores: dict[str, np.ndarray] = {}
 rng = np.random.default_rng(0)
 scores["random"] = rng.random((len(users), len(item_ids)))
 
+# book:start ch03_scores
 pop_all = per_item(pos.groupby("item_id")["w"].sum())
 scores["pop_all_time"] = pop_all
 
@@ -47,13 +48,16 @@ scores["pop_7d"] = pop7
 w_decay = pos["w"] * np.power(0.5, pos["age_days"] / HALF_LIFE)
 pop_decay = per_item(w_decay.groupby(pos["item_id"]).sum())
 scores["pop_decay"] = pop_decay
+# book:end ch03_scores
 
 # Bayesian average: shrink each item's rating toward the global mean; m = mean rating_count.
 items = avail.set_index("item_id")
+# book:start ch03_bayes
 v, R = items["rating_count"].to_numpy(float), items["rating_avg"].to_numpy(float)
 m = v.mean()
 C = float((R * v).sum() / v.sum())
 bayes = v / (v + m) * R + m / (v + m) * C
+# book:end ch03_bayes
 scores["bayesian_rating"] = bayes
 print(f"m (mean rating_count) = {m:.1f}, C (global mean rating) = {C:.3f}")
 ex = pd.DataFrame({"rating_avg": R, "rating_count": v, "bayes": bayes}, index=item_ids)
@@ -73,7 +77,9 @@ P = np.zeros((len(cats), len(item_ids)))
 cat_max = pd.Series(pop7).groupby(item_cat).transform("max").to_numpy().clip(min=1e-9)
 P[item_cat, np.arange(len(item_ids))] = pop7 / cat_max
 # Users with no history get an all-zero row -> the tiny pop_7d term makes them fall back to global trending.
+# book:start ch03_personal
 scores["pop_in_my_categories"] = A @ P + 1e-6 * pop7 / max(pop7.max(), 1e-9)
+# book:end ch03_personal
 n_cold = int((A.sum(axis=1) == 0).sum())
 print(f"\neval users with no category signal (fall back to pop_7d): {n_cold} of {len(users)}")
 
