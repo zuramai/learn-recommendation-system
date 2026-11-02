@@ -4,6 +4,8 @@ It is the week before the 9.9 sale and Sari, a product manager on the marketplac
 
 What Sari needs is a recommender that looks at what an item *is*, not only at who touched it. If the dripper's title says "coffee" and the buyer has been clicking on coffee things, the two can be matched without a single interaction on the new product. That idea is **content-based filtering**.
 
+Sari's problem has a name: **cold start**. A *cold* item or user is one with no history yet, so every method that learns from past clicks has nothing to learn from. Content-based filtering is the standard answer to cold start, because it only needs facts that exist from the first second: the title, the brand and the category.
+
 **What you'll learn**
 
 - How to turn an item's text and metadata into a numeric vector, and why we weight words with TF-IDF instead of just counting them.
@@ -11,6 +13,17 @@ What Sari needs is a recommender that looks at what an item *is*, not only at wh
 - How to build a user profile as a decay-weighted average of the item vectors the user touched, and how to score every item against it.
 - How the companion script `ch04_content.py` performs on the simulated marketplace, and why it beats global popularity but not category-aware popularity.
 - Where content-based methods shine (cold start) and where they fail (over-specialisation, shallow metadata).
+
+Here is a quick map of the words this chapter uses. Each one is explained again, slowly, where it first appears.
+
+| Word | Plain meaning |
+|---|---|
+| **Vector** | A list of numbers in a fixed order. We turn each product into one, so a computer can compare products. |
+| **TF-IDF** | A way to fill that list so that rare, specific words count more than common, generic ones. |
+| **Cosine similarity** | A score from 0 to 1 for how alike two vectors are. 1 means the same direction, 0 means nothing in common. |
+| **User profile** | A taste summary of one shopper, built by blending the vectors of the products they touched. |
+| **Cold start** | Recommending for a new item or new user who has no history yet. |
+| **Filter bubble** | When a recommender keeps showing more of the same, so the shopper never sees anything different. |
 
 ## Intuition: the librarian who never watches the readers
 
@@ -56,54 +69,94 @@ region: item_text
 
 An item titled "Volt Skincare Lokal" in category "Skincare" with brand "Volt" and parent category "Beauty" becomes the document `Volt Skincare Lokal Skincare Volt Beauty`. Note that category and brand words are repeated on purpose: titles in this simulator are short, and repeating the structured fields lets them count more than once.
 
-Next we turn each document into a vector. The naive way is a **bag of words**: count how many times each vocabulary word appears.
+Next we turn each document into a **vector**. A vector is just a **list of numbers in a fixed order**. To build one, we first collect the **vocabulary**: the list of every distinct word that appears in any item. Then the vector holds one number per vocabulary word. The simplest recipe is a **bag of words**: shake the words out of the title as if from a bag, and write down how many times each vocabulary word appears.
+
+For example, take a vocabulary of four words in the order (`aurora`, `coffee`, `sneakers`, `volt`). The title text `volt sneakers sneakers` becomes the vector $(0, 0, 2, 1)$: zero `aurora`, zero `coffee`, two `sneakers`, one `volt`. You will meet this exact vector again as item D in the hand-worked example below.
+
+Why bother? A computer cannot tell that two titles "feel alike", but it can easily compare two lists of numbers. Real vocabularies have thousands of words, and any one title uses only a handful of them, so nearly every entry is zero. Such a mostly-zero vector is called **sparse**, and we store only its non-zero entries to save memory.
 
 ### Step 2: TF-IDF weighting
 
-Bag-of-words has an obvious flaw. The word "home" appears in every item of the category "Home & Living" (and in the parent-category text of each one), so it tells us almost nothing about *which* home item a buyer wants, while the word "sneakers" is specific and carries much more information. We want rare words to count more than common words.
+Bag-of-words has an obvious flaw. The word "home" appears in every item of the category "Home & Living" (and in the parent-category text of each one), so it tells us almost nothing about *which* home item a buyer wants, while the word "sneakers" is specific and carries much more information. We want **rare words to count more than common words**.
 
-**TF-IDF** (term frequency–inverse document frequency) does exactly that. For a term $t$ in document $d$ out of a collection of $N$ documents:
+Think of a detective game where you must guess a suspect from clues. "Wears shoes" is a useless clue: nearly everyone does. "Walks with a limp" is a great clue: very few people do. A good clue is one that most suspects do *not* have. TF-IDF scores words the same way, using two parts:
+
+- **TF, term frequency**: how many times the word appears in *this* item's text. More repeats, more important to this item.
+- **IDF, inverse document frequency**: how *unusual* the word is across the whole catalogue. Here a "document" is one item's text. A word found in almost every item gets a low IDF; a word found in only a few items gets a high IDF.
+
+Multiply the two and you get the **TF-IDF** (term frequency–inverse document frequency) weight. Without the IDF part, common words such as "home" would drown out the specific ones. In symbols, for a term $t$ in document $d$ out of a collection of $N$ documents:
 
 $$
 \text{tfidf}(t, d) = \text{tf}(t, d) \times \text{idf}(t)
 $$
 
-where $\text{tf}(t,d)$ is the number of times $t$ occurs in $d$, and the inverse document frequency downweights terms that occur in many documents. The version used by scikit-learn's `TfidfVectorizer`, which our script uses, is the *smoothed* one:
+where $\text{tf}(t,d)$ is the number of times $t$ occurs in $d$, and the inverse document frequency downweights terms that occur in many documents. The version used by scikit-learn's `TfidfVectorizer` (a ready-made TF-IDF tool in the scikit-learn Python library), which our script uses, is the *smoothed* one:
 
 $$
 \text{idf}(t) = \ln\frac{1 + N}{1 + \text{df}(t)} + 1
 $$
 
-with $\text{df}(t)$ the number of documents that contain $t$. The "+1" terms keep the logarithm finite and guarantee that even a term present in every document keeps a small positive weight.
+with $\text{df}(t)$ the **document frequency**: the number of documents that contain $t$. $\ln$ is the natural logarithm, a function that grows slowly: a bigger ratio inside gives a bigger result, but never explosively. The "+1" terms keep the logarithm finite and guarantee that even a term present in every document keeps a small positive weight.
 
-Finally each document vector $\mathbf{x}_d$ is **L2-normalised** to unit length:
+Let us plug numbers into a catalogue of $N = 4$ items:
+
+| The word appears in... | df | idf = ln((1+4)/(1+df)) + 1 |
+|---|---|---|
+| all 4 items (generic) | 4 | $\ln(5/5) + 1 = 1.000$ |
+| 2 items | 2 | $\ln(5/3) + 1 \approx 1.511$ |
+| 1 item (rare) | 1 | $\ln(5/2) + 1 \approx 1.916$ |
+
+The rarer the word, the bigger the multiplier. If "sneakers" appears twice in an item (tf = 2) and is rare (idf 1.916), its weight is $2 \times 1.916 = 3.832$.
+
+Finally we **L2-normalise** each document vector: we rescale it so that its length becomes exactly 1. The L2 length is the ordinary straight-line length you know from Pythagoras: square every entry, add them up, take the square root. For the vector $(3, 4)$ the length is $\sqrt{9 + 16} = 5$, so dividing every entry by 5 gives $(0.6, 0.8)$, which has length 1 and points the same way. Formally, each document vector $\mathbf{x}_d$ becomes
 
 $$
 \hat{\mathbf{x}}_d = \frac{\mathbf{x}_d}{\lVert \mathbf{x}_d \rVert_2}
 $$
 
-so that a long title does not automatically look more important than a short one.
+where $\lVert \mathbf{x}_d \rVert_2$ is that length (the little hat on $\hat{\mathbf{x}}$ means "length 1"). This makes sure a long title does not automatically look more important than a short one: only the *proportions* between its words remain.
 
 ### Step 3: cosine similarity
 
-To compare two vectors we measure the angle between them rather than the distance between their tips:
+Cosine similarity answers one question: **do these two vectors point the same way?** Picture each vector as an arrow from the same starting point. Two arrows pointing in the same direction are "the same taste" (score 1); two arrows at right angles share nothing (score 0). We measure the angle between the arrows, rather than the distance between their tips:
 
 $$
 \cos(\mathbf{a}, \mathbf{b}) = \frac{\mathbf{a} \cdot \mathbf{b}}{\lVert \mathbf{a} \rVert \, \lVert \mathbf{b} \rVert}
 $$
 
-Because TF-IDF vectors have no negative entries, cosine lies between 0 (no shared terms at all) and 1 (identical direction). When both vectors are already unit length, as ours are after step 2, the denominator is 1 and **cosine similarity is simply the dot product**. That is why the script can compute the similarity of every pair of items with one sparse matrix multiplication, `X @ X.T`.
+Two pieces of notation. The **dot product** $\mathbf{a} \cdot \mathbf{b}$ means: multiply the numbers in matching positions, then add them up. And $\lVert \mathbf{a} \rVert$ is the length of $\mathbf{a}$ from the previous step. By hand with two small vectors, $\mathbf{a} = (1, 2, 0)$ and $\mathbf{b} = (2, 1, 3)$:
 
-Why angle and not Euclidean distance? A text repeated twice gives a vector twice as long but pointing the same way; cosine correctly calls it identical.
+- dot product: $1\times2 + 2\times1 + 0\times3 = 4$.
+- lengths: $\lVert \mathbf{a} \rVert = \sqrt{5} \approx 2.236$ and $\lVert \mathbf{b} \rVert = \sqrt{14} \approx 3.742$.
+- cosine: $4 / (2.236 \times 3.742) \approx 0.478$.
+
+Two sanity checks. Vectors $(1, 0)$ and $(0, 1)$ share no word at all, so their dot product is 0 and the cosine is 0. Vectors $(1, 2, 0)$ and $(2, 4, 0)$ are the same direction, one just twice as long: dot product 10, lengths product $2.236 \times 4.472 = 10$, cosine exactly 1.
+
+Because TF-IDF vectors have no negative entries, cosine lies between 0 (no shared terms at all, the arrows are at right angles) and 1 (identical direction). When both vectors are already unit length, as ours are after step 2, the denominator is 1 and **cosine similarity is simply the dot product**. That is why the script can compute the similarity of every pair of items with one sparse matrix multiplication, `X @ X.T`: `X` has one row per item, and the product is a big table with the similarity of every item to every other item.
+
+Why angle and not Euclidean distance (the straight-line distance between the two arrow tips)? A text repeated twice gives a vector twice as long but pointing the same way, as in our $(1, 2, 0)$ and $(2, 4, 0)$ example. The tips are far apart, yet the content is the same, and cosine correctly calls it identical.
 
 ### Step 4: the user profile
 
-Items now live in a vector space. A user is described by what they did to items, so the natural profile is a **weighted average of the vectors of the items they interacted with**. Two kinds of weight apply to each event:
+The profile is **a taste summary of one shopper, written as a vector in the same word-space as the items**. Items now live in a **vector space** (just "the place where all these vectors sit"). A user is described by what they did to items, so the natural profile is a **weighted average of the vectors of the items they interacted with**.
+
+A weighted average is like a course mark where the exam counts more than a quiz. If a quiz scores 80 with weight 1 and an exam scores 90 with weight 5, the final mark is $(1\times80 + 5\times90)/(1+5) = 88.3$: pulled towards the exam because it weighs more. In the same way, the items that matter most pull the profile towards themselves. Two kinds of weight apply to each event (a click, an add-to-cart or an order):
 
 - **Strength.** In this repo a click counts 1, an add-to-cart 3 and an order 5 (`EVENT_WEIGHT` in `recommender/recsys/schema.py`). Buying something is stronger evidence of taste than glancing at it.
 - **Recency.** Taste drifts; a click from last week matters more than a click from last month. We apply exponential decay with a half-life $h$ of 7 days: an event of age $a$ days is multiplied by $2^{-a/h}$.
 
-Writing $w_e$ for the strength of event $e$, $a_e$ for its age and $\hat{\mathbf{x}}_{i(e)}$ for the vector of the item it touched, the profile is
+What is **exponential decay with a half-life**? It means an event loses *half* of its weight every $h$ days. With $h = 7$:
+
+| Age of the event | Multiplier $2^{-a/7}$ |
+|---|---|
+| today (0 days) | 1 |
+| 7 days | 0.5 |
+| 14 days | 0.25 |
+| 21 days | 0.125 |
+
+So the weight fades smoothly: an order placed a week ago (strength 5) counts as 5 × 0.5 = 2.5, instead of vanishing abruptly or counting at full strength forever.
+
+Now the formula, symbol by symbol. $E_u$ is the set of user $u$'s events. For one event $e$: $w_e$ is its strength, $a_e$ is its age in days, and $\hat{\mathbf{x}}_{i(e)}$ is the unit-length vector of the item $i(e)$ it touched. The top of the fraction adds up all the item vectors, each scaled by its strength and freshness; the bottom adds up those same scales. The profile is
 
 $$
 \mathbf{p}_u = \frac{\sum_{e \in E_u} w_e \, 2^{-a_e/h} \, \hat{\mathbf{x}}_{i(e)}}{\sum_{e \in E_u} w_e \, 2^{-a_e/h}},
@@ -111,7 +164,9 @@ $$
 \hat{\mathbf{p}}_u = \frac{\mathbf{p}_u}{\lVert \mathbf{p}_u \rVert_2}.
 $$
 
-The denominator makes it a proper average, so a user with 100 events does not get a bigger vector than a user with 5. The decay function is the same one the repo already uses for its "recently viewed" retriever:
+In words: multiply each touched item's vector by "strength × freshness", add the results, divide by the total of "strength × freshness", then scale the result to length 1 (the second equation).
+
+The denominator makes it a proper average, so a user with 100 events does not get a bigger vector than a user with 5. The decay function is the same one the repo already uses for its "recently viewed" retriever (a retriever is the quick first step of a recommender that picks a shortlist of candidate items):
 
 ```include
 path: recommender/recsys/candidates.py
@@ -120,13 +175,13 @@ symbol: _decay
 
 ### Step 5: scoring and ranking
 
-For every available item $j$, the score for user $u$ is
+Now we **score** items: we give every item a number saying how well it fits this user's taste. We use cosine similarity between the profile and the item. For every available item $j$ (one that is in stock at the cutoff), the score for user $u$ is
 
 $$
 \text{score}(u, j) = \hat{\mathbf{p}}_u \cdot \hat{\mathbf{x}}_j .
 $$
 
-Sort descending and keep the top 50 per user. Users with no history have an all-zero profile; the script breaks their ties with a tiny popularity term so they get the `pop_7d` list.
+Sort descending and keep the top 50 per user. Users with no history have an all-zero profile, so every item scores exactly 0, a complete tie. The script **breaks the tie** with a tiny popularity term (a very small extra number added to the score, which only matters when everything else is equal), so these users get the `pop_7d` list: the globally most popular items of the last 7 days, from chapter 3.
 
 ### A worked example by hand
 
@@ -154,6 +209,8 @@ $$
 
 and after normalisation $\hat{\mathbf{p}} = (0.793,\ 0.226,\ 0.566,\ 0)$. The scores are A 0.721, B 0.160, C 0.961 and D 0.506. C wins because it carries both of the user's strongest words; D outranks B because the sneakers signal is strong while B shares only the weak "coffee" signal. (A and C are already seen; a production system filters them out, the simple baseline here does not.)
 
+How to read this result: the profile $(0.793,\ 0.226,\ 0.566,\ 0)$ says "mostly `aurora`, then `sneakers`, a little `coffee`, nothing about `volt`". It is a readable taste summary, and each item's score is just how closely its own word-list lines up with it.
+
 
 ## Code walkthrough
 
@@ -161,7 +218,7 @@ The full script is `book/code/ch04_content.py`; the snippets below are included 
 
 ### Preparing the item text
 
-The script starts by loading the shared simulated data through `common.py`, so every algorithm in the book sees exactly the same history, cutoff and eval users. It then joins each item to its category and parent category names and builds the text:
+The script starts by loading the shared simulated data through `common.py`, so every algorithm in the book sees exactly the same history, **cutoff** (the moment in time we freeze; the model may only see what happened before it) and eval users (the shoppers on whom we measure the results). It then joins each item to its category and parent category names and builds the text:
 
 ```include
 path: book/code/ch04_content.py
@@ -184,7 +241,7 @@ path: book/code/ch04_content.py
 region: tfidf
 ```
 
-`fit_transform` does three jobs at once: it learns the vocabulary and the document frequencies, computes the IDF for each word, and returns a sparse matrix `X` with one L2-normalised row per item. `item_row` maps an item id to its row number so we can look items up later. Keeping the matrix sparse matters: with a real vocabulary of tens of thousands of words, a dense matrix would be unmanageable, but each item only touches a handful of columns.
+`fit_transform` does three jobs at once: it learns the vocabulary and the document frequencies, computes the IDF for each word, and returns a sparse matrix `X` with one L2-normalised row per item. `item_row` maps an item id to its row number so we can look items up later. A **sparse matrix** is a table that stores only its non-zero cells. Keeping it sparse matters: with a real vocabulary of tens of thousands of words, a table with a cell for every item-word pair would be unmanageable, but each item only touches a handful of columns.
 
 ### Building profiles with sparse algebra
 
@@ -223,7 +280,7 @@ path: book/code/ch04_content.py
 region: scoring
 ```
 
-`profile @ Xa.T` produces the full user × available-item score matrix in one product. Only items that are in stock at the cutoff (`avail`) are scored. The popularity tie-break is scaled to $10^{-6}$ so it can only separate scores that are otherwise equal: it decides among cold users (all zeros) and among near-duplicate items, but never overrides a real content difference. The final `argsort` picks the top 50 per user, and `common.evaluate` computes exactly the same metrics used for all other chapters.
+`profile @ Xa.T` produces the full user × available-item score matrix in one product. Only items that are in stock at the cutoff (`avail`) are scored. The popularity tie-break is scaled to $10^{-6}$ (one millionth) so it can only separate scores that are otherwise equal: it decides among cold users (all zeros) and among near-duplicate items, but never overrides a real content difference. The final `argsort` returns item positions sorted by score, from which we pick the top 50 per user, and `common.evaluate` computes exactly the same metrics used for all other chapters.
 
 ## Run it
 
@@ -260,7 +317,9 @@ file: results/ch04_content.txt
 lines: 34-37
 ```
 
-Chapter 3 reported `pop_7d` at 0.0475 and `pop_in_my_categories` at 0.1302 on the same labels.
+Here is a reminder of the metrics in that table. **NDCG@20** (normalised discounted cumulative gain) is a score from 0 to 1 that rewards placing the item the shopper really bought near the *top* of their 20 recommendations. **recall@20** is the share of the items a shopper really bought that appear anywhere in the 20. **coverage@20** is the share of the whole catalogue that appears in *anyone's* top 20. For every metric, higher is better.
+
+Chapter 3 reported `pop_7d` (most popular items of the last 7 days) at 0.0475 and `pop_in_my_categories` (most popular items inside the categories the user already shops in) at 0.1302 on the same labels.
 
 Three conclusions:
 
@@ -279,7 +338,7 @@ Look at the first query. "Aurora Coffee & Tea Import" has a nearest neighbour wi
 
 This is a teaching point, not a bug. Identical text gives identical vectors, so no content-based method can tell the items apart; a content-only recommender will happily fill the top 5 slots with copies of the same product. Telling them apart needs *behavioural* signals such as price, rating and popularity.
 
-The heat map shows the cosine between 15 items, five from each of three categories:
+A **heat map** is a table where each cell is coloured by its number: bright means high, dark means low. This one shows the cosine between 15 items, five from each of three categories:
 
 ![Cosine similarity between 15 items from three categories (Coffee & Tea, Snacks, Sneakers). Black lines separate the categories. Blocks on the diagonal are bright; everything off-diagonal is near zero.](../assets/charts/ch04-similarity-heatmap.png)
 
@@ -308,19 +367,19 @@ Source: Westergren, NPR interview, 2011
 
 ![The marketplace's search page for the query "coffee". Results are matched on title and category text and then sorted by popularity.](../assets/screenshots/search.png)
 
-The app already contains a tiny content-based component: the backend matches the typed query against product titles and category names (an `ILIKE` filter in `backend/src/catalog.rs`), and the "Popular" ordering is not content-based at all. The profile approach of this chapter replaces the typed query with a *query built from the user's own behaviour*.
+The app already contains a tiny content-based component: the backend matches the typed query against product titles and category names (an `ILIKE` filter, meaning a case-insensitive "contains this text" match, in `backend/src/catalog.rs`), and the "Popular" ordering is not content-based at all. The profile approach of this chapter replaces the typed query with a *query built from the user's own behaviour*.
 
 ## Pitfalls and how it is done in production
 
 ### Over-specialisation
 
-The librarian who only reads covers keeps recommending more of the same. Our profile for user 894 is dominated by "diapers", so the recommendations will be diaper-adjacent; if that user needs a stroller next, no word overlap suggests it. The system has no **serendipity**.
+The librarian who only reads covers keeps recommending more of the same. Our profile for user 894 is dominated by "diapers", so the recommendations will be diaper-adjacent; if that user needs a stroller next, no word overlap suggests it. This is **over-specialisation**, and when it happens to a whole feed it is often called a **filter bubble**: the shopper sees only what resembles their past, and the system never learns whether they would have liked something different. The system has no **serendipity** (the pleasant surprise of finding something you did not know you wanted).
 
-Mitigations: blend with collaborative signals such as co-visitation (chapter 5), re-rank for diversity with MMR and category caps (chapter 11), and reserve a few slots for exploration.
+Mitigations: blend with collaborative signals such as co-visitation (items viewed together in the same session; chapter 5), re-rank for diversity with MMR (maximal marginal relevance: a re-ranking rule that penalises an item that is too similar to ones already chosen) and category caps (chapter 11), and reserve a few slots for exploration.
 
 ### Shallow metadata, noisy text
 
-Content-based methods are only as good as the content. Here titles come from a template; real seller titles are stuffed with keywords ("MURAH!!! Best Seller Sneakers Pria Wanita Original 100%"), misspell brands and mix languages. Production systems clean titles, extract structured attributes, and increasingly replace TF-IDF with learned text and image embeddings (chapter 7).
+Content-based methods are only as good as the content. Here titles come from a template; real seller titles are stuffed with keywords ("MURAH!!! Best Seller Sneakers Pria Wanita Original 100%"), misspell brands and mix languages. Production systems clean titles, extract structured attributes, and increasingly replace TF-IDF with learned text and image **embeddings** (vectors a model has learned so that similar things end up close together; chapter 7).
 
 ### The cold-start strength
 
@@ -328,11 +387,11 @@ A brand-new item has no clicks, so popularity, co-visitation and matrix factoris
 
 ### Scalability and tuning
 
-Item vectors are computed offline and stored in an approximate-nearest-neighbour index (chapter 7); the profile is looked up at request time. Tune the half-life, the event weights and the text recipe on the same time-split evaluation as everything else; you will vary the half-life in the hands-on exercise.
+Item vectors are computed offline and stored in an approximate-nearest-neighbour index (a lookup structure that finds items with similar vectors quickly, without comparing against every single item, at the cost of occasionally missing the very best match; chapter 7); the profile is looked up at request time. Tune the half-life, the event weights and the text recipe on the same time-split evaluation as everything else; you will vary the half-life in the hands-on exercise.
 
 ### How this fits the repo's ranking system
 
-The content-based score is not a retriever in the final repo pipeline; the four retrievers are `recent`, `covisit`, `catpop` and `global_trending`. Content knowledge enters the ranker differently: as *features* such as `uc_click_share_30d` (the share of the user's clicks that fall in the item's category) and `item_price_vs_category` (price divided by the category median), defined in `schema.py` and computed in `features.py`. That is a common production pattern. A cheap content score becomes one input among many into a learned ranker, rather than the whole recommender. The ranker then learns, from data, how much to trust content relative to popularity or recency.
+The content-based score is not a retriever in the final repo pipeline; the four retrievers are `recent`, `covisit`, `catpop` and `global_trending`. Content knowledge enters the ranker (the slower, smarter model that sorts the shortlist) differently: as *features* (input numbers the model learns from) such as `uc_click_share_30d` (the share of the user's clicks that fall in the item's category) and `item_price_vs_category` (price divided by the category median), defined in `schema.py` and computed in `features.py`. That is a common production pattern. A cheap content score becomes one input among many into a learned ranker, rather than the whole recommender. The ranker then learns, from data, how much to trust content relative to popularity or recency.
 
 ## Summary
 
