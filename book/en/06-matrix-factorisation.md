@@ -50,10 +50,6 @@ Here is the part that matters for sparsity. Notice that the foodie never needs t
 
 The second idea is **low rank**. A click matrix with $m$ users and $n$ items has $m \times n$ cells. A factorisation with $f$ factors replaces it with two matrices that hold only $(m + n) \times f$ numbers. In this chapter's data that is the difference between roughly three million cells ($1408 \times 2120 = 2{,}984{,}960$) and $(1408 + 2120) \times 32 = 112{,}896$ parameters. Squeezing that much information through a narrow bottleneck *forces* the model to find the regularities in the data, which is why compression and generalisation are, here, the same thing.
 
-::: tip
-A useful mental picture: factorisation maps users and items into the *same* small room. Everything in the room has coordinates, and "nearby or pointing the same way" means "likely to click". Chapter 7 keeps this picture and replaces the free-floating coordinates with learned neural towers.
-:::
-
 ## The algorithm
 
 We will walk through three models in increasing order of relevance to this repository: classic explicit factorisation (to see the shape of the idea), implicit ALS (the workhorse for click data), and BPR (the ranking-aware alternative).
@@ -98,11 +94,7 @@ Source: Funk, "Netflix Update: Try This at Home" (sifter.org blog), 2006
 
 ### Why explicit factorisation is a poor fit for clicks
 
-Our data is not ratings. It is behaviour: clicks, carts, orders. Two properties of implicit feedback break the explicit loss above.
-
-First, **there are no observed negatives**. If Rina did not click the gaming mouse, we do not know whether she dislikes it or has never seen it. If we only fit the nonzero cells, every prediction can drift upward and nothing penalises it. If we fit *all* cells and treat zeros as true ratings of 0, we are claiming that 99% of the catalogue is something every user hates.
-
-Second, **the numbers mean something different**. A rating of 5 stars means "I loved it". A weight of 6 (click plus order) means "I am *quite sure* I wanted it", which is a statement about confidence, not about the size of the preference.
+Implicit feedback has **no observed negatives**: if Rina did not click the gaming mouse, she may dislike it or may never have seen it. Fitting only nonzero cells lets predictions drift upward; treating zeros as ratings of 0 claims most of the catalogue is hated. And the numbers mean something else: a weight of 6 (click plus order) expresses *confidence*, not the size of a preference.
 
 Hu, Koren and Volinsky resolved both problems with one reframing. Split every cell into two quantities:
 
@@ -165,10 +157,6 @@ The first term, the **Gram matrix** $Y^{\top}Y$, does not depend on the user, so
 
 Predictions follow: $0.4 \times (1, 2, 3) = (0.4,\ 0.8,\ 1.2)$ for the three items. The two touched items have targets of 1 but only reach 0.4 and 0.8. With $\lambda$ small and one factor the model cannot satisfy everyone, and the untouched item 3 is *predicted high* because its factor is large. In a real model with 32 dimensions and a dozen touched items per user, the extra freedom lets the fit be much tighter. The lesson to take from the arithmetic is the structure: a single user is a small ridge regression whose rows are the items they touched.
 
-::: tip
-The ALS equation is the same one you would use for ridge regression with sample weights. If you have ever called `Ridge(sample_weight=...)`, you have already implemented one half of an ALS sweep.
-:::
-
 ```mermaid
 flowchart TD
     R["R (click 1, cart 3, order 5)<br/>p = 1 if R > 0, c = 1 + alpha * R<br/>X, Y start as small random numbers"] --> U["Fix Y: solve every user row<br/>x_u = (Y'CuY + lambda I)^-1 Y'Cu p(u)"]
@@ -200,18 +188,7 @@ $$x_u \mathrel{+}= \eta \bigl( s\, (y_i - y_j) - \lambda x_u \bigr), \quad y_i \
 
 The scalar $s$ is the key. When the pair is already ordered correctly by a wide margin, $\hat{x}_{uij}$ is large, $s \approx 0$, and the triple barely changes anything. When the pair is wrong or tied, $s$ is near $0.5$ or higher and the update is large. The model spends its effort on the pairs it currently gets wrong, which is the same intuition as the LambdaMART gradients you will meet in Chapter 10.
 
-**Worked example 3: one BPR step.** Let $x_u = (0.5, -0.2)$, $y_i = (1.0, 0.5)$ (the clicked item), $y_j = (0.2, 1.0)$ (a random unclicked item). Use $\eta = 0.1$ and $\lambda = 0$.
-
-1. Difference: $y_i - y_j = (0.8, -0.5)$.
-2. Gap: $\hat{x}_{uij} = 0.5 \cdot 0.8 + (-0.2)(-0.5) = 0.4 + 0.1 = 0.5$.
-3. Probability of the right order: $\sigma(0.5) \approx 0.6225$. Loss: $-\ln 0.6225 \approx 0.474$.
-4. Step size: $s = 1 - 0.6225 = 0.3775$.
-5. Update $x_u$: $(0.5, -0.2) + 0.1 \cdot 0.3775 \cdot (0.8, -0.5) \approx (0.5302, -0.2189)$.
-6. Update $y_i$: $(1.0, 0.5) + 0.1 \cdot 0.3775 \cdot (0.5, -0.2) \approx (1.0189, 0.4924)$.
-7. Update $y_j$: $(0.2, 1.0) - 0.1 \cdot 0.3775 \cdot (0.5, -0.2) \approx (0.1811, 1.0076)$.
-8. New gap: $\approx 0.557$, up from $0.5$. New loss: about $0.453$, down from $0.474$.
-
-One tiny step moved the pair in the right direction. Note the symmetry: the clicked item is pulled toward the user, the sampled negative pushed away, and the user vector is rotated toward their difference.
+**Worked example 3: one BPR step.** Let $x_u = (0.5, -0.2)$, $y_i = (1.0, 0.5)$ (clicked), $y_j = (0.2, 1.0)$ (random), $\eta = 0.1$, $\lambda = 0$. The difference is $y_i - y_j = (0.8, -0.5)$, so the gap is $0.5 \cdot 0.8 + (-0.2)(-0.5) = 0.5$. Then $\sigma(0.5) \approx 0.6225$, the loss is $-\ln 0.6225 \approx 0.474$ and $s = 0.3775$. The updates are $x_u \approx (0.5302, -0.2189)$, $y_i \approx (1.0189, 0.4924)$ and $y_j \approx (0.1811, 1.0076)$. The new gap is about $0.557$ and the loss about $0.453$: one tiny step moved the pair the right way.
 
 One practical detail. At initialisation all vectors are close to zero, so every gap is close to 0 and $\sigma(0) = 0.5$, meaning every triple has loss $-\ln 0.5 = \ln 2 \approx 0.693$. When you train BPR, a loss that *starts* near 0.693 is a good sign that the code is wired correctly.
 
@@ -230,19 +207,12 @@ flowchart LR
 
 ### Hyperparameters in one place
 
-Both models share the same handful of knobs, and it pays to know what each one trades off.
+- `factors` $f$: too low underfits (tastes cannot be separated), too high overfits and slows training.
+- `reg` $\lambda$: too low memorises sparse users, too high shrinks every score toward 0.
+- `alpha` $\alpha$ (ALS): too low makes observed and unobserved cells look alike; too high lets one click dominate and collapses recommendations onto popular items.
+- `iters` / `epochs`: stop when the loss plateaus; BPR also needs a sensible `lr` (too high oscillates) and enough sampled negatives.
 
-| Knob | Meaning | Too low | Too high |
-|---|---|---|---|
-| `factors` $f$ | Width of the taste vector | Underfits: cannot separate tastes | Overfits, slower, needs more regularisation |
-| `reg` $\lambda$ | Penalty on vector length | Memorises sparse users | Everything shrinks toward 0, scores flatten |
-| `alpha` $\alpha$ (ALS) | How much more an interaction counts than a blank | Observed and unobserved cells look alike | A single click dominates; the model collapses onto a few popular items |
-| `iters` (ALS) | Number of alternating sweeps | Not converged | Wasted time; loss plateaus |
-| `lr` $\eta$ (BPR) | SGD step size | Loss crawls | Loss oscillates or diverges |
-| `epochs` (BPR) | Passes over all positives | Under-trained | Overfits training pairs |
-| negatives per positive | How many $j$ per $(u,i)$ | Noisy gradient | Slower; diminishing returns |
-
-Our scripts use `factors = 32`, `reg = 0.1`, `alpha = 20`, 15 ALS iterations for ALS; and `lr = 0.05`, `reg = 0.01`, 30 epochs and one sampled negative for BPR. Those are reasonable defaults, not tuned optima, and we will see that distinction matter in the results.
+Our scripts use `factors = 32`, `reg = 0.1`, `alpha = 20`, 15 iterations for ALS; and `lr = 0.05`, `reg = 0.01`, 30 epochs, one negative for BPR. These are defaults, not tuned optima.
 
 ## Code walkthrough
 
@@ -316,14 +286,7 @@ From the `book/` directory:
 uv run python code/ch06_mf.py
 ```
 
-The run takes a couple of seconds because the matrix is tiny. First the setup, which restates the data shape:
-
-```output
-file: results/ch06_mf.txt
-lines: 2-4
-```
-
-Then ALS. Each line prints the full objective after one alternating sweep:
+The run takes a couple of seconds because the matrix is tiny. ALS first. Each line prints the full objective after one alternating sweep:
 
 ```output
 file: results/ch06_mf.txt
@@ -363,18 +326,11 @@ The ALS curve is the classic shape of an alternating optimiser. Iteration 1 ends
 
 ![BPR: mean pairwise loss per epoch. It starts near ln 2 and decreases slowly at first, then quickly, then slowly again.](../assets/charts/ch06-bpr-loss.png)
 
-The BPR curve has a different, more characteristic shape. Epoch 1 is at 0.6937, essentially $\ln 2 \approx 0.693$: at initialisation the model cannot tell positives from random items, so every gap is near zero. For the first five epochs, almost nothing happens (0.6530 at epoch 5). Then the loss drops fast: 0.4835 at epoch 10, 0.2937 at epoch 15. After that it bends again and reaches 0.1094 by epoch 30. The slow start comes from the small random initialisation: when every vector is tiny, the gradients are also tiny, and it takes a few epochs for the vectors to grow large enough for the dot products to separate. Crucially, the loss was **still falling** at epoch 30: the model is not converged, which is one reason to interpret its ranking score with care.
+The BPR curve starts at 0.6937, essentially $\ln 2 \approx 0.693$: at initialisation every gap is near zero. Almost nothing happens for five epochs (0.6530 at epoch 5) because tiny vectors give tiny gradients; then the loss drops fast (0.4835 at epoch 10, 0.2937 at epoch 15) and reaches 0.1094 by epoch 30. It was **still falling** at epoch 30, so the model is not converged.
 
 ### Ranking quality against everything so far
 
-Training loss is not ranking quality, so we now evaluate both models on the same held-out week and the same metrics as the earlier chapters. The table below repeats the ch06 numbers:
-
-```output
-file: results/ch06_mf.txt
-lines: 61-65
-```
-
-For comparison, here are the Chapter 5 methods and, below them, the Chapter 3 baselines on identical labels:
+Training loss is not ranking quality, so we evaluate both models on the same held-out week and metrics as earlier chapters (the ch06 rows are in the table above). For comparison, the Chapter 5 methods and the best Chapter 3 baseline on identical labels:
 
 ```output
 file: results/ch05_cf.txt
@@ -383,7 +339,7 @@ lines: 31-37
 
 ```output
 file: results/ch03_popularity.txt
-lines: 15-22
+lines: 22-22
 ```
 
 A few conclusions follow directly from the numbers.
@@ -412,25 +368,21 @@ Source: Sarno, Los Angeles Times, 2009
 Source: Rendle et al., UAI, 2009
 :::
 
-### What the factors buy you, and what they do not
+### What the factors buy you
 
-The results are mixed in an instructive way. Matrix factorisation is *not* a magic upgrade over neighbourhood methods on a small, dense-enough catalogue; user-kNN keeps its edge on ndcg. What factorisation gives you is something else: a **compact, learnable, differentiable representation** of every user and item. That representation can be cached, compared with a dot product (fast), indexed by an approximate nearest-neighbour structure (Chapter 7), fed into a ranker as a feature (Chapter 10), or extended with side information such as category and price. The neighbourhood methods give you none of that. In a multi-stage system such as the one in this repository, the relevant question is not "does ALS beat user-kNN in isolation?" but "does adding an ALS candidate source raise the recall of the union?", which is the question Chapter 8 answers.
+Factorisation is not a magic upgrade over neighbourhood methods on a small catalogue; user-kNN keeps its ndcg edge. What it gives is a **compact, learnable representation** of every user and item that can be indexed by approximate nearest-neighbour search (Chapter 7), fed to a ranker as a feature (Chapter 10) or extended with side information. In a multi-stage system the question is whether an ALS source raises the recall of the union (Chapter 8).
 
 ## Pitfalls and how it is done in production
 
-**Tuning on your test set.** The hyperparameters above (`alpha`, `factors`, `reg`) change the metrics noticeably. It is tempting to sweep them and keep whichever scores best on the evaluation labels. If you do, you are fitting the *evaluation* data and the reported number is optimistic. In practice, hold out a *validation* window earlier than the test window, tune on it, then evaluate once on the test week. We deliberately kept the book's defaults un-tuned for this reason.
+**Tuning on your test set.** Sweeping `alpha`, `factors` and `reg` against the evaluation labels fits the evaluation data. Tune on an earlier validation window and evaluate once on the test week; we left the defaults un-tuned for this reason.
 
 **Treating unobserved as negative.** ALS gives unobserved cells weight 1 and observed cells a larger weight, which is a soft version of the assumption, but it is still an assumption. A great item the user never saw is penalised during training. Uniform negative sampling in BPR has the same flaw: a random unclicked item could be a hidden favourite. Production systems mitigate it with *exposure-aware* negatives (items that were shown but ignored, the `impression` events) and with popularity-weighted sampling. This repository logs impressions precisely so that such negatives are available.
 
-**Popularity bias in sampling.** Uniform sampling picks rare items as negatives far more often than popular ones, simply because there are more of them. The model therefore learns "popular means good" strongly. Rendle's later work and many industrial systems sample negatives in proportion to popularity (raised to some power) to balance this. We will hit the same issue in the two-tower model of Chapter 7, where it requires a correction term.
-
 **Dense matrices do not scale.** Our teaching code builds dense $C$, $P$ and error matrices. At Shopee scale there are hundreds of millions of users and tens of millions of items, and nothing about that matrix is dense. Production implementations keep $R$ in compressed sparse form, process users in blocks that fit on a GPU, and shard $X$ and $Y$ across machines. The open-source `implicit` library and Spark's MLlib implement exactly the sparse form of the algorithm you just read.
 
-**Fold-in for new activity.** Retraining the whole model on every click is out of the question, but the ALS user solve is *closed form*. If $Y$ is frozen, a user's vector can be recomputed in a fraction of a millisecond from their latest clicks, using the same formula as the code above. This "fold-in" trick is a standard way to give a nightly-trained model fresh behaviour signals. It is the same spirit as this repository's on-request design, where the freshest events are read from Postgres at request time.
+**Fold-in for new activity.** With $Y$ frozen, a user's vector is a closed-form solve, so it can be recomputed in under a millisecond from their latest clicks, which is how nightly-trained models get fresh signals (compare this repository's on-request design).
 
-**Stale factors.** Item vectors age. A new product has no vector at all until the next training run, and a seasonal item's vector decays in relevance. Matrix factorisation inherits all the cold-start problems of collaborative filtering (Chapter 12), so production systems pair it with content features or a retriever that does not depend on history.
-
-**Dot product, not distance.** Predictions use $x_u \cdot y_i$, which is not a metric: vector length matters. Approximate nearest-neighbour libraries are built for cosine or Euclidean distance, and need a transformation (or a "maximum inner product search" variant) to serve dot-product scores. Chapter 7 covers this when we index vectors.
+**Dot product, not distance.** Predictions use $x_u \cdot y_i$, so vector length matters; ANN libraries need a maximum-inner-product variant (Chapter 7).
 
 **Where it sits in this repository.** The Python recommender service in this repo does not use ALS or BPR today; its candidate sources are the four retrievers from Chapter 8 and its ranker is LightGBM (Chapter 10). A natural, low-risk extension is to train an ALS model offline during retrain, store the user and item vectors, and use their dot product as an additional candidate source and as a *feature* for the ranker. Chapter 14 lists that in the "what to build next" checklist. Nothing in the service would need to change shape: `Store.snapshot()` already exposes everything the training function needs.
 
@@ -476,14 +428,7 @@ The results are mixed in an instructive way. Matrix factorisation is *not* a mag
 
 **Q6.7** (Calculation) In BPR, suppose for one triple $\hat{x}_{uij} = -\ln 3 \approx -1.0986$. Compute $\sigma(\hat{x}_{uij})$, the loss $-\ln \sigma(\hat{x}_{uij})$ and the gradient multiplier $s = \sigma(-\hat{x}_{uij})$. Is the triple ordered correctly? Will the update be large or small?
 
-**Q6.8** (Code reading) Look at these lines from the `bpr` function:
-
-```include
-path: book/code/ch06_mf.py
-symbol: bpr
-```
-
-Focus on `sig = 1.0 / (1.0 + np.exp(gap))`, `gu`, `gi` and `gj`. What does `sig` equal mathematically, why does it appear as a multiplier in all three gradients, and why does `gj` have a negative sign in front of `sig`?
+**Q6.8** (Code reading) In the `bpr` function shown in the walkthrough, look at `sig = 1.0 / (1.0 + np.exp(gap))` and at `gu`, `gi` and `gj`. What does `sig` equal mathematically, why does it multiply all three gradients, and why does `gj` carry a negative sign?
 
 **Q6.9** ALS has a higher recall@20 than user-kNN (0.2715 against 0.2273) but a lower ndcg@20 (0.1581 against 0.1662). What does the difference between the two metrics tell you about what each method does well? Where in a multi-stage system would you therefore use ALS?
 
