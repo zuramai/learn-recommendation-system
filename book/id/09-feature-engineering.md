@@ -264,7 +264,7 @@ Peningkatan 2.4× dari satu kolom seharusnya membuat Anda curiga, bukan senang. 
 
 **3. *Training/serving skew*.** Pertahanan terbaik adalah satu jalur kode: `features.build` melayani pelatihan, evaluasi, dan layanan gRPC langsung. Sistem dengan *pipeline* batch dan online terpisah membutuhkan tes paritas yang menjalankan keduanya pada masukan yang sama, karena perbedaan pembulatan, zona waktu, atau aturan nilai hilang diam-diam menurunkan kualitas model.
 
-**5. *Feature creep*.** Setiap fitur adalah dependensi yang memakan waktu *serving* dan bisa rusak ketika sumbernya berubah. Tambahkan satu kelompok, jalankan ablasi (Bab 10), dan buang kelompok yang tidak membantu.
+**4. *Feature creep*.** Setiap fitur adalah dependensi yang memakan waktu *serving* dan bisa rusak ketika sumbernya berubah. Tambahkan satu kelompok, jalankan ablasi (Bab 10), dan buang kelompok yang tidak membantu.
 
 ::: fact
 **Dependensi data adalah utang teknis.** Dalam "Hidden Technical Debt in Machine Learning Systems", Sculley dan rekan-rekannya menguraikan dependensi data yang *tidak stabil* (*unstable*) dan *kurang dimanfaatkan* (*underutilized*): sinyal masukan yang perilakunya berubah seiring waktu, atau yang memberi manfaat pemodelan tambahan sangat kecil namun membuat sistem rentan terhadap perubahan di hulu. Mereka menyarankan mendeteksi dependensi yang kurang dimanfaatkan dengan evaluasi *leave-one-feature-out* yang menyeluruh dan rutin, persis seperti ablasi kelompok yang kita jalankan di Bab 10.
@@ -272,7 +272,7 @@ Peningkatan 2.4× dari satu kolom seharusnya membuat Anda curiga, bukan senang. 
 Sumber: Sculley et al., NeurIPS, 2015
 :::
 
-**6. Biaya saat *serving*.** Kode bab ini menghitung ulang setiap tabel fitur pada setiap permintaan `Recommend`, itulah sebabnya satu permintaan memakan waktu kira-kira satu detik (diukur di Bab 13). Produksi menghitung di muka bagian yang berat (statistik item oleh *streaming job*, fitur pengguna di penyimpanan *key-value*) dan hanya menghitung fitur pasangan yang murah seperti `same_city` pada saat permintaan. *Definisi*-nya tetap identik.
+**5. Biaya saat *serving*.** Kode bab ini menghitung ulang setiap tabel fitur pada setiap permintaan `Recommend`, itulah sebabnya satu permintaan memakan waktu kira-kira satu detik (diukur di Bab 13). Produksi menghitung di muka bagian yang berat (statistik item oleh *streaming job*, fitur pengguna di penyimpanan *key-value*) dan hanya menghitung fitur pasangan yang murah seperti `same_city` pada saat permintaan. *Definisi*-nya tetap identik.
 
 ## Ringkasan
 

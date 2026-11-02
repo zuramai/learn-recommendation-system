@@ -264,7 +264,7 @@ A 2.4× improvement from one column should make you suspicious, not happy. Red f
 
 **3. Training/serving skew.** The best defence is one code path: `features.build` serves training, evaluation and the live gRPC service. Systems with separate batch and online pipelines need parity tests that run both on the same inputs, because a different rounding, time zone or missing-value rule silently degrades the model.
 
-**5. Feature creep.** Every feature is a dependency that costs serving time and can break when its source changes. Add a group, run an ablation (Chapter 10), and remove groups that do not help.
+**4. Feature creep.** Every feature is a dependency that costs serving time and can break when its source changes. Add a group, run an ablation (Chapter 10), and remove groups that do not help.
 
 ::: fact
 **Data dependencies are technical debt.** In "Hidden Technical Debt in Machine Learning Systems", Sculley and colleagues describe *unstable* and *underutilized* data dependencies: input signals that change behaviour over time, or that provide little incremental modelling benefit yet make the system vulnerable to upstream changes. They recommend detecting underutilized dependencies with regular, exhaustive leave-one-feature-out evaluations, which is exactly the group ablation we run in Chapter 10.
@@ -272,7 +272,7 @@ A 2.4× improvement from one column should make you suspicious, not happy. Red f
 Source: Sculley et al., NeurIPS, 2015
 :::
 
-**6. Cost at serving time.** This chapter's code recomputes every feature table on each `Recommend` request, which is why a request takes roughly a second (measured in Chapter 13). Production precomputes the heavy parts (item statistics by a streaming job, user features in a key-value store) and computes only cheap pair features such as `same_city` at request time. The *definitions* stay identical.
+**5. Cost at serving time.** This chapter's code recomputes every feature table on each `Recommend` request, which is why a request takes roughly a second (measured in Chapter 13). Production precomputes the heavy parts (item statistics by a streaming job, user features in a key-value store) and computes only cheap pair features such as `same_city` at request time. The *definitions* stay identical.
 
 ## Summary
 
