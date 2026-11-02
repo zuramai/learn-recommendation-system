@@ -129,6 +129,75 @@ sequenceDiagram
    (`recommender/recsys/db.py`) reads only events newer than the last ones it
    saw. Your click is now history, and the pipeline below picks it up.
 
+### The life of one search
+
+Search does **not** call the recommender. It is a plain SQL text match in the
+Rust API (`backend/src/catalog.rs`, `products`). What a search *does* do is
+leave a row in the `searches` table, and that row shapes your home feed on
+the next recommendation request.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as Shopper
+    participant FE as Frontend (Vue :5173)
+    participant BE as Backend (Rust/Axum :8080)
+    participant DB as Postgres
+    participant RS as Recommender (Python gRPC :50051)
+
+    rect rgba(128,128,128,0.08)
+    Note over U,RS: ① Search request: the recommender is NOT called
+    U->>FE: type "cat" in NavBar
+    FE->>FE: router.push('/search?q=cat')
+    FE->>BE: GET /api/products?q=cat&sort=popular&page=1
+    BE->>DB: SELECT cards WHERE title ILIKE '%cat%' OR category ILIKE '%cat%' ORDER BY rating_count LIMIT 24
+    DB-->>BE: product cards
+    BE->>DB: SELECT count(*) (same filters)
+    DB-->>BE: total
+    opt logged in and query not empty
+        BE->>DB: INSERT INTO searches (session_id, user_id, query)
+    end
+    BE-->>FE: JSON {items, total, page, page_size}
+    FE-->>U: ProductGrid shows results
+    FE->>BE: POST /api/events (impression/click, surface=search)
+    BE->>DB: INSERT INTO events
+    end
+
+    rect rgba(128,128,128,0.08)
+    Note over U,RS: ② Next home-feed request: the saved search shapes recommendations
+    U->>FE: open Home
+    FE->>BE: GET /api/recommendations?k=20
+    BE->>BE: cookie → user_id, build RecommendRequest{user_id, k, surface}
+    BE->>RS: gRPC Recommend (5 s timeout)
+    RS->>DB: Store refresh: new searches + events since last id (read-only)
+    DB-->>RS: rows incl. the "cat" search
+    RS->>RS: searched_categories(): "cat" → cat categories
+    RS->>RS: candidates (category_affinity uses searches) → features (uc_searches_30d)
+    RS->>RS: LightGBM score → re-rank → top-k + SHAP reasons
+    alt success
+        RS-->>BE: item ids, scores, sources, reasons
+        BE->>DB: hydrate() product cards
+        DB-->>BE: cards
+        BE-->>FE: JSON {items, model_version, fallback:false}
+    else gRPC error or timeout
+        BE->>DB: fallback(): recent best-sellers
+        DB-->>BE: cards
+        BE-->>FE: JSON {items, model_version:"fallback", fallback:true}
+    end
+    FE-->>U: "For you" grid + why-this reasons
+    end
+```
+
+1. The "Popular" and "Relevance" sorts both order by `rating_count`; there is
+   no relevance model behind search results.
+2. The query is saved only when you are logged in and typed something.
+3. On the next `Recommend` call, `History.searched_categories()`
+   (`recommender/recsys/data.py`) maps each query to categories by a simple
+   substring match on the category name. Those categories feed the
+   **category popular** retriever (`category_affinity`) and the ranking
+   feature `uc_searches_30d` (your searches in the item's category over the
+   last 30 days).
+
 ---
 
 ## 4. What gets logged and why
