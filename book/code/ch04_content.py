@@ -16,6 +16,7 @@ from common import TOP_N, section
 from recsys import candidates
 
 HALF_LIFE = 7.0
+# book:start data_prep
 hist = common.history()
 avail = common.available_items()
 users = common.eval_users()
@@ -24,12 +25,16 @@ cats = hist.categories.set_index("category_id")
 items = hist.items.copy()
 items["category_name"] = items["category_id"].map(cats["name"])
 items["parent_name"] = items["category_id"].map(cats["parent_name"])
+# book:end data_prep
+# book:start item_text
 items["text"] = items["title"] + " " + items["category_name"] + " " + items["brand"] + " " + items["parent_name"]
+# book:end item_text
 
 section("Item text and TF-IDF")
 print("Example documents:")
 for t in items["text"].head(3):
     print(f"  {t!r}")
+# book:start tfidf
 vec = TfidfVectorizer(lowercase=True)
 X = vec.fit_transform(items["text"])  # rows are L2-normalised already
 print(f"\nitems: {X.shape[0]}, vocabulary: {X.shape[1]} terms, non-zeros per item: {X.nnz / X.shape[0]:.1f}")
@@ -39,8 +44,10 @@ print(idf.head(5).round(3).to_string())
 print("Highest IDF (rare, discriminative):")
 print(idf.tail(5).round(3).to_string())
 item_row = {it: i for i, it in enumerate(items["item_id"])}
+# book:end tfidf
 
 section("User profiles (decay-weighted mean of interacted item vectors)")
+# book:start profile_build
 pos = hist.interactions()
 pos = pos[pos["item_id"].isin(item_row)]
 pos = pos.assign(s=pos["w"] * np.power(0.5, pos["age_days"] / HALF_LIFE))
@@ -49,7 +56,10 @@ p = pos[pos["user_id"].isin(uidx)]
 p = p.groupby(["user_id", "item_id"], as_index=False)["s"].sum()
 W = sp.csr_matrix((p["s"], (p["user_id"].map(uidx), p["item_id"].map(item_row))), shape=(len(users), X.shape[0]))
 wsum = np.asarray(W.sum(axis=1)).ravel()
+# book:end profile_build
+# book:start profile_norm
 profile = normalize(sp.diags(1 / np.where(wsum > 0, wsum, 1)) @ W @ X)
+# book:end profile_norm
 n_cold = int((wsum == 0).sum())
 print(f"profiles built for {len(users) - n_cold} of {len(users)} eval users; {n_cold} fall back to pop_7d")
 u0 = users[np.argmax(wsum)]
@@ -59,12 +69,14 @@ print(f"\nStrongest profile terms for user {u0}:")
 print(top_terms.round(3).to_string())
 
 section("Results (cosine(profile, item), top 50 per user)")
+# book:start scoring
 item_ids = avail["item_id"].to_numpy()
 Xa = X[[item_row[i] for i in item_ids]]
 S = np.asarray((profile @ Xa.T).todense())
 pop7 = candidates.item_popularity(hist, 7).reindex(item_ids).fillna(0).to_numpy()
 S = S + 1e-6 * pop7 / max(pop7.max(), 1e-9)  # cold users: tie-break by popularity
 top = np.argsort(-S, axis=1, kind="stable")[:, :TOP_N]
+# book:end scoring
 recs = pd.DataFrame({"user_id": np.repeat(users, TOP_N), "item_id": item_ids[top].ravel()})
 row_res = common.evaluate(recs, "content_tfidf")
 common.print_table([row_res])

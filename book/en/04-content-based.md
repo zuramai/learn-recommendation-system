@@ -49,11 +49,10 @@ Everything in the diagram is cheap, deterministic and explainable, which is why 
 
 The simplest, and surprisingly effective, way to represent an item is to glue its descriptive fields into one string and treat that string as a short document. In the companion script this is one line:
 
-```python
-items["text"] = items["title"] + " " + items["category_name"] + " " + items["brand"] + " " + items["parent_name"]
+```include
+path: book/code/ch04_content.py
+region: item_text
 ```
-
-*Excerpt from `book/code/ch04_content.py`.*
 
 An item titled "Volt Skincare Lokal" in category "Skincare" with brand "Volt" and parent category "Beauty" becomes the document `Volt Skincare Lokal Skincare Volt Beauty`. Note that category and brand words are repeated on purpose: titles in this simulator are short, and repeating the structured fields lets them count more than once.
 
@@ -170,33 +169,31 @@ Hand-calculate a tiny example like this one before trusting a library call. When
 
 ## Code walkthrough
 
-The full script is `book/code/ch04_content.py` (118 lines). We walk through it in four pieces. The excerpts below are copied verbatim from the file; they run top to bottom as one script, not as functions.
+The full script is `book/code/ch04_content.py` (about 120 lines). We walk through it in four pieces. The snippets below are included straight from the file; they run top to bottom as one script, not as functions.
 
 ### Preparing the item text
 
 The script starts by loading the shared simulated data through `common.py`, so every algorithm in the book sees exactly the same history, cutoff and eval users. It then joins each item to its category and parent category names and builds the text:
 
-```python
-hist = common.history()
-avail = common.available_items()
-users = common.eval_users()
-cats = hist.categories.set_index("category_id")
+```include
+path: book/code/ch04_content.py
+region: data_prep
+```
 
-items = hist.items.copy()
-items["category_name"] = items["category_id"].map(cats["name"])
-items["parent_name"] = items["category_id"].map(cats["parent_name"])
-items["text"] = items["title"] + " " + items["category_name"] + " " + items["brand"] + " " + items["parent_name"]
+Then the text column is built:
+
+```include
+path: book/code/ch04_content.py
+region: item_text
 ```
 
 Note that `hist` is `History.at(tables, CUTOFF)`: only the data visible at the cutoff. Items listed after the cutoff do not exist for this model, which keeps the evaluation honest.
 
 ### Fitting TF-IDF
 
-```python
-vec = TfidfVectorizer(lowercase=True)
-X = vec.fit_transform(items["text"])  # rows are L2-normalised already
-idf = pd.Series(vec.idf_, index=vec.get_feature_names_out()).sort_values()
-item_row = {it: i for i, it in enumerate(items["item_id"])}
+```include
+path: book/code/ch04_content.py
+region: tfidf
 ```
 
 `fit_transform` does three jobs at once: it learns the vocabulary and the document frequencies, computes the IDF for each word, and returns a sparse matrix `X` with one L2-normalised row per item. `item_row` maps an item id to its row number so we can look items up later. Keeping the matrix sparse matters: with a real vocabulary of tens of thousands of words, a dense matrix would be unmanageable, but each item only touches a handful of columns.
@@ -205,16 +202,16 @@ item_row = {it: i for i, it in enumerate(items["item_id"])}
 
 This is the heart of the script, and it avoids any Python loop over users:
 
-```python
-pos = hist.interactions()
-pos = pos[pos["item_id"].isin(item_row)]
-pos = pos.assign(s=pos["w"] * np.power(0.5, pos["age_days"] / HALF_LIFE))
-uidx = {u: i for i, u in enumerate(users)}
-p = pos[pos["user_id"].isin(uidx)]
-p = p.groupby(["user_id", "item_id"], as_index=False)["s"].sum()
-W = sp.csr_matrix((p["s"], (p["user_id"].map(uidx), p["item_id"].map(item_row))), shape=(len(users), X.shape[0]))
-wsum = np.asarray(W.sum(axis=1)).ravel()
-profile = normalize(sp.diags(1 / np.where(wsum > 0, wsum, 1)) @ W @ X)
+```include
+path: book/code/ch04_content.py
+region: profile_build
+```
+
+The last line of the profile construction is the normalisation step:
+
+```include
+path: book/code/ch04_content.py
+region: profile_norm
 ```
 
 `hist.interactions()` returns the click, add-to-cart and order events with a column `w` holding the strength weight:
@@ -233,12 +230,9 @@ The script multiplies `w` by the decay factor to get the effective weight `s`, t
 
 ### Scoring, tie-breaking and evaluation
 
-```python
-Xa = X[[item_row[i] for i in item_ids]]
-S = np.asarray((profile @ Xa.T).todense())
-pop7 = candidates.item_popularity(hist, 7).reindex(item_ids).fillna(0).to_numpy()
-S = S + 1e-6 * pop7 / max(pop7.max(), 1e-9)  # cold users: tie-break by popularity
-top = np.argsort(-S, axis=1, kind="stable")[:, :TOP_N]
+```include
+path: book/code/ch04_content.py
+region: scoring
 ```
 
 `profile @ Xa.T` produces the full user × available-item score matrix in one product. Only items that are in stock at the cutoff (`avail`) are scored. The popularity tie-break is scaled to $10^{-6}$ so it can only separate scores that are otherwise equal: it decides among cold users (all zeros) and among near-duplicate items, but never overrides a real content difference. The final `argsort` picks the top 50 per user, and `common.evaluate` computes exactly the same metrics used for all other chapters.
@@ -415,8 +409,9 @@ D. A recommender using only past orders.
 
 **Q4.6** Read this line from the script:
 
-```python
-profile = normalize(sp.diags(1 / np.where(wsum > 0, wsum, 1)) @ W @ X)
+```include
+path: book/code/ch04_content.py
+region: profile_norm
 ```
 
 What would go wrong without `np.where(wsum > 0, wsum, 1)`, and what would the profile row of a user with no positive events be after the line runs?
