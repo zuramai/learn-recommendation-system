@@ -243,6 +243,10 @@ def slugify_fig(n: int) -> str:
 OPTION_LINE = re.compile(r"^[A-D][.)]\s")
 
 
+# A backslash after these would corrupt the construct (heading text, table row, callout fence, math).
+NON_PROSE = re.compile(r"^\s*(:::|#|\||\$\$|[-*+] |\d+[.)] )")
+
+
 def break_option_lines(text: str) -> str:
     """Multiple-choice options written on consecutive lines would be joined into one paragraph;
     end the line before each `A. `/`B) `… option with a hard break so every option gets its own line."""
@@ -253,7 +257,7 @@ def break_option_lines(text: str) -> str:
             in_fence = not in_fence
         nxt = lines[i + 1] if i + 1 < len(lines) else ""
         if (not in_fence and line.strip() and OPTION_LINE.match(nxt)
-                and not line.endswith(("\\", "  "))):
+                and not NON_PROSE.match(line) and not line.endswith(("\\", "  "))):
             lines[i] = line + "\\"
     return "\n".join(lines)
 
