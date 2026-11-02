@@ -87,11 +87,9 @@ $$
 
 Let us sanity check that the shape is what we claim. At age 0 the weight is 1. At age 7 it is $2^{-1} = 0.5$. At 14 it is $2^{-2} = 0.25$, at 21 it is $0.125$. After a month it is about 5%, and an event from the start of the history is worth almost nothing. The script prints these numbers, and the chart plots them.
 
-Why exponential? Three reasons make it the default in production systems.
+![Exponential decay with a 7-day half-life: the weight halves every seven days, from 1 at age zero to 0.5, 0.25 and 0.125 at ages 7, 14 and 21.](../assets/charts/ch03-decay-curve.png)
 
-- **It is memoryless.** The relative value of two events depends only on the *gap* between them, not on when you look. Re-scoring tomorrow multiplies every score by the same constant, so the ranking does not change.
-- **It updates incrementally.** You do not need to store every event. Keep one number per item, $S$, and the time of its last update. When a new event with weight $w$ arrives at time $t$, set $S \leftarrow S \cdot 2^{-(t - t_{\text{last}})/h} + w$. One multiply and one add: this is how streaming "trending" counters are implemented at scale.
-- **One intuitive knob.** "Half-life of one week" is a sentence a product manager can argue with. If you know how fast interest in your category fades, you can compute $h$ directly. Want an event to be worth 10% after 30 days? Solve $2^{-30/h} = 0.1$, so $h = 30 \ln 2 / \ln 10 \approx 9.0$ days.
+Exponential decay is the production default for three reasons. It is **memoryless**: relative value depends only on the gap between events, so re-scoring tomorrow does not change the ranking. It **updates incrementally**: keep one number $S$ per item and set $S \leftarrow S\cdot 2^{-(t-t_{\text{last}})/h} + w$ on each event, one multiply and one add. And it has **one intuitive knob**: to make an event worth 10% after 30 days, solve $2^{-30/h}=0.1$, giving $h = 30\ln 2/\ln 10 \approx 9.0$ days.
 
 ### A tiny worked example
 
@@ -131,7 +129,7 @@ $$
 \text{WR} = \tfrac{20}{120}\cdot 4.8 + \tfrac{100}{120}\cdot 4.0 = 0.8 + 3.33 = 4.13 .
 $$
 
-The item looks great (4.8), but twenty ratings is not much, so the estimate stays close to the prior. The same arithmetic works on a conversion rate. If an item was shown 10 times and clicked 3 times, the raw CTR is 30%. With a global CTR of 5% and a strength of 50 pseudo-impressions, the smoothed CTR is $(3 + 0.05 \cdot 50)/(10 + 50) = 5.5/60 = 9.2\%$. An item with 1,000 impressions and 50 clicks has a raw CTR of 5%, and the smoothed value is $(50 + 2.5)/1050 = 5.0\%$, essentially unchanged. The rule is automatic: small samples are shrunk hard, large samples barely move.
+The item looks great (4.8), but twenty ratings is not much, so the estimate stays close to the prior. The same arithmetic works on a conversion rate: 3 clicks in 10 impressions (30% raw) with a 5% global CTR and strength 50 smooths to $(3+2.5)/60 = 9.2\%$, while 50 clicks in 1,000 impressions stays at 5.0%. Small samples are shrunk hard; large ones barely move.
 
 ::: fact
 **The "Top 250" is a Bayesian average.** IMDb publicly documents the formula it uses to rank its Top 250 films: weighted rating = (v ÷ (v+m)) × R + (m ÷ (v+m)) × C, where R is the title's mean rating, v its number of ratings, m the minimum ratings required to be listed (currently 25,000), and C the mean rating across all titles. IMDb itself calls this "a true Bayesian estimate". It is exactly the formula in this section.
@@ -158,7 +156,7 @@ $$
 
 Why normalise within the category? Without it, a huge category such as Snacks would drown out everything else. With it, every category has the same "ceiling", and the user's affinity decides *which categories' stars* appear. A tiny extra term (a millionth of the global popularity) breaks ties and gives users with *no* history, who have all-zero affinity, the plain `pop_7d` list as a fallback.
 
-Worked example: suppose Sari spends 60% of her activity on Cat Food, 30% on Dog Toys and 10% on Skincare. The best-selling cat-food item scores $0.6 \times 1 = 0.6$, the second-best, with 80% of the leader's popularity, scores $0.6 \times 0.8 = 0.48$. The best dog toy scores $0.3$. The best skincare item scores only $0.1$, so it will not appear until all cat-food items with $\tilde p > 0.5$ and several dog toys are placed first. Her feed is mostly pet items, ordered by how popular each is *within its shelf*.
+Worked example: Sari spends 60% of her activity on Cat Food, 30% on Dog Toys and 10% on Skincare. The best cat-food item scores $0.6\times1=0.6$, the runner-up at 80% of its popularity $0.48$, the best dog toy $0.3$, the best skincare item only $0.1$. Her feed is mostly pet items, ordered by popularity within each shelf.
 
 ::: fact
 **Popularity bias is not a bug in your implementation; it is a documented property of recommenders.** Abdollahpouri and colleagues showed on a movie dataset that many recommendation algorithms concentrate their output on popular items, even for users whose taste is mostly niche, and they quantified this as a "bias disparity" between what users want and what they get.
@@ -210,21 +208,19 @@ Again a one-liner, and again exactly the formula: `(num + prior * strength) / (d
 
 ### The experiment script
 
-The companion script `book/code/ch03_popularity.py` builds all six scorers over the same items and users, then evaluates them with `common.evaluate`, the shared function that makes results comparable across chapters. Two small helpers do the bookkeeping. `per_item` aligns any per-item Series to the fixed array of available items, with zeros for items without events:
+The companion script `book/code/ch03_popularity.py` builds all six scorers over the same items and users and evaluates them with the shared `common.evaluate`. Two helpers do the bookkeeping: `per_item` aligns a per-item Series to the fixed array of available items (zeros for items without events), and `recs_from_scores` turns a score matrix (or a single vector, broadcast to every user) into the top 50 rows per user.
 
 ```include
 path: book/code/ch03_popularity.py
 symbol: per_item
 ```
 
-and `recs_from_scores` turns a score matrix into the top 50 rows per user. A one-dimensional score vector means "same list for everyone", so it is broadcast across users:
-
 ```include
 path: book/code/ch03_popularity.py
 symbol: recs_from_scores
 ```
 
-The `kind="stable"` sort matters. Many items have identical scores (zero, typically), and an unstable sort could return a different tie order on each run, which would make results irreproducible. With a stable sort, ties are broken by item order, so the output is deterministic.
+The stable sort matters: many items tie at zero, and an unstable sort would make runs irreproducible.
 
 Now the scorers themselves. The first three are nearly one-liners (they sit at module level in the script):
 
@@ -251,10 +247,6 @@ region: ch03_personal
 
 `A` has one row per evaluation user and one column per category; `P` has one row per category and one column per item, and is non-zero only where the item belongs to the row's category. The matrix product therefore gives, for each user and item, exactly $s_{u,c(i)}\,\tilde p(i)$. The trailing term is the tie-breaker described earlier.
 
-::: tip
-When you write your own baseline, make it return a *score per item*, never a pre-sorted list. Scores can be combined, normalised, and fed to a ranker later, as the repository does by keeping each retriever's score as a ranking feature. A sorted list throws that information away.
-:::
-
 ## Run it
 
 From the `book/` directory, with the dependencies installed (see the Preface):
@@ -264,7 +256,7 @@ cd book
 uv run python code/ch03_popularity.py
 ```
 
-The script prints three groups of output. First, the Bayesian-average setup and four sample rows showing the shrinkage in action:
+The script also prints the top five items of each global method; we show three groups here. First, the Bayesian-average setup and four sample rows showing the shrinkage in action:
 
 ```output
 file: results/ch03_popularity.txt
@@ -278,22 +270,20 @@ file: results/ch03_popularity.txt
 lines: 14-22
 ```
 
-Finally the top five items of each global method and the decay weights at a few ages:
+Finally the decay weights at a few ages:
 
 ```output
 file: results/ch03_popularity.txt
-lines: 24-58
+lines: 50-58
 ```
 
 The script also writes `results/ch03_popularity.json`, which the figure script reads to draw the two charts below.
 
 ## Results
 
-### The decay curve
+### Reading the decay curve
 
-![Exponential decay with a 7-day half-life: the weight halves every seven days, from 1 at age zero to 0.5, 0.25 and 0.125 at ages 7, 14 and 21.](../assets/charts/ch03-decay-curve.png)
-
-The curve confirms the arithmetic. The printed weights agree with it: 0.9057 after one day, 0.7430 after three, exactly 0.5000 after seven, 0.2500 after fourteen and 0.1250 after twenty-one. By the 30-day mark the weight has fallen to 0.0513, and an event 53 days old, the oldest in the history here, is worth only 0.0053 of a fresh one. This means that, for ranking purposes, decay with a one-week half-life behaves like a soft window of roughly two to three weeks.
+The decay curve in Figure 3.2 confirms the arithmetic. The printed weights agree with it: 0.9057 after one day, 0.7430 after three, exactly 0.5000 after seven, 0.2500 after fourteen and 0.1250 after twenty-one. By the 30-day mark the weight has fallen to 0.0513, and an event 53 days old, the oldest in the history here, is worth only 0.0053 of a fresh one. This means that, for ranking purposes, decay with a one-week half-life behaves like a soft window of roughly two to three weeks.
 
 ### The leaderboard
 
@@ -307,13 +297,13 @@ Read the main table row by row. We focus on ndcg@20 (the single number that rewa
 
 **All-time slightly beats the 7-day window, which is the opposite of what intuition suggests.** Many practitioners expect "trending" to win. It does not here, and the reason is a property of *this data*: in the simulator, each item has a fixed hidden quality, so an item's hidden quality does not change and an item that was popular a month ago is still popular. Under stable popularity, more history means less noise, and the 53-day count is a better estimate of the same underlying number than a one-week count is. The decay variant sits between the two for exactly that reason: its effective window is longer than seven days but still downweights the old.
 
-There is a second place to look. At deeper cut-offs the decayed list is much closer to the all-time list: recall@50 is 0.1557 for `pop_decay` and 0.1575 for `pop_all_time`, while the hard window falls to 0.1335. A smooth slope keeps the long tail of evidence that a cliff discards.
+At deeper cut-offs the decayed list is much closer to the all-time list (recall@50 is 0.1557 versus 0.1575, while the hard window falls to 0.1335): a smooth slope keeps the long tail of evidence that a cliff discards.
 
 ::: warning
 Do not take "all-time beats 7-day" as a law of nature. It says that the *simulated* catalogue has stationary popularity. On a real marketplace, flash sales, viral products, seasonal categories (Ramadan, 9.9, 11.11) make popularity drift, and the windowed or decayed list typically wins. The lesson is to **measure on your own data**, and to treat the window or half-life as a hyperparameter tuned on a validation week.
 :::
 
-**Quality is not demand.** `bayesian_rating` has ndcg@20 0.0325 and recall@20 0.0648: about nine times better than random, but clearly worse than every demand-based method. Look at the sample rows printed by the script. Item 892 has a stated average of 4.4 but zero ratings, and the Bayesian score is 4.324, the global mean $C$. Item 1840, also 4.4, with 34 ratings, moves to 4.343: a small step away from the prior. Item 610, with a 5.0 average and 2718 ratings, ends at 4.975: with that many ratings the evidence swamps the prior ($m = 105.2$). That is shrinkage working as designed, but a *good rating* is not a *reason to click*. People buy what they need. A very well-rated niche product is only relevant to the few users who need it, and the same ranking is shown to everyone. Bayesian ratings belong in a feature set or a "top rated" shelf, not as a home feed ranker.
+**Quality is not demand.** `bayesian_rating` has ndcg@20 0.0325 and recall@20 0.0648: about nine times better than random, but worse than every demand-based method. In the sample rows, item 892 (stated 4.4, zero ratings) scores 4.324, the global mean $C$; item 1840 (4.4, 34 ratings) moves a little to 4.343; item 610 (5.0, 2718 ratings) ends at 4.975 because the evidence swamps the prior ($m = 105.2$). Shrinkage works as designed, but a good rating is not a reason to click: a well-rated niche product matters only to the few who need it. Use Bayesian ratings as a feature or a "top rated" shelf, not as a home-feed ranker.
 
 It is also worth noticing the placeholders hiding in raw data. The first printed row has `rating_avg` 4.5 with zero ratings: a default value written to every new item. Without smoothing, every unrated item would carry a fictitious 4.5, which would look *better* than most real products. The Bayesian average silently repairs this by treating zero ratings as "no information".
 
@@ -321,31 +311,15 @@ It is also worth noticing the placeholders hiding in raw data. The first printed
 
 Notice the 21 evaluation users, out of 947, who had no category signal at all and fell back to plain `pop_7d`. That is about 2% of users, and the fallback means they still get a sensible page rather than an empty one: the same graceful degradation the production system relies on when a new visitor arrives.
 
-### What the app shows
-
-The anonymous home page of the running marketplace is a popularity recommender. The Rust API forwards a request with user id 0 to the Python service, which has no history to work from and so draws all its candidates from the trending list, in other words, `item_popularity` over the most recent days. (The model then re-orders those candidates, which Chapters 8 to 10 explain.)
-
-![The marketplace home page for an anonymous visitor: the heading reads "Popular now" and the grid shows the trending items, every visitor sees the same list.](../assets/screenshots/home-anon.png)
-
-The heading says "Popular now", and the cards are the same for every anonymous visitor. When you log in as a demo buyer, the same endpoint returns a personalised list; the difference between those two screens is the difference between `pop_7d` and `pop_in_my_categories` in the table above, plus everything the following chapters add.
-
 ## Pitfalls and how it is done in production
 
 ### Popularity is self-reinforcing
 
 The most important problem is not accuracy, it is the **feedback loop**. If you show the same twenty items to everybody, people click those twenty items (because those are the ones they can see), the click counts for those items grow, and next week they are even more "popular". Items outside the list cannot gain evidence, no matter how good they are. Economists call it the Matthew effect; recommender folks call it popularity bias.
 
-```mermaid
-flowchart LR
-    A[Popular items shown<br/>at the top] --> B[More impressions<br/>and clicks]
-    B --> C[Higher popularity<br/>score]
-    C --> A
-    D[New or niche item<br/>never shown] -.->|no impressions,<br/>no clicks| E[Stays unpopular]
-```
+The loop is simple: exposure produces clicks, clicks produce score, and score decides exposure, so items outside the list cannot enter it.
 
-*Figure: The popularity feedback loop. Exposure produces clicks, clicks produce score, and score decides exposure; items outside the loop cannot enter it.*
-
-The table makes it visible. The three global methods all have coverage@20 of 0.0087: across 947 users, they recommend the *same twenty items*. The personalised method, at 0.2164, touches roughly twenty-five times as many distinct items, and random, at 1.0000, touches them all. Look at the top five lists printed above, too: the first four items are the same for `pop_all_time` and `pop_7d`, and item 2381 ("Garuda Makeup Lite") is first in all three. This is the effect we are warning about.
+The table makes it visible. The three global methods all have coverage@20 of 0.0087: across 947 users, they recommend the *same twenty items*. The personalised method, at 0.2164, touches roughly twenty-five times as many distinct items, and random, at 1.0000, touches them all.
 
 Production systems address it in layers, none of which is a baseline's job but all of which build on one:
 
@@ -357,27 +331,15 @@ Production systems address it in layers, none of which is a baseline's job but a
 
 ### Choosing the window and half-life
 
-Both the window $W$ and the half-life $h$ are hyperparameters. Too short and you chase noise: a flash sale of one hour determines the entire list. Too long and you serve yesterday's news. Reasonable defaults depend on the *velocity* of the category. Fashion, electronics and food move at different speeds; some marketplaces use one half-life per top-level category. The cheap way to choose is to try three values (say 3, 7, 14 days) on a held-out week, which is exactly what the hands-on exercise below asks you to do.
+Both $W$ and $h$ are hyperparameters. Too short chases noise (a one-hour flash sale decides the list); too long serves yesterday's news. Fashion, electronics and food move at different speeds, so some marketplaces use one half-life per top-level category. Try three values (say 3, 7, 14 days) on a held-out week, as the hands-on exercise asks.
 
-### Do not mix scales
+### Do not mix scales, count users
 
-Two numbers that look alike can mean very different things. `pop_7d` sums weights over seven days. `pop_decay` sums weights over fifty-three days but discounts them. Their absolute values are not comparable, and neither is comparable to a rating in $[1, 5]$. If you ever blend baselines (say, 0.7 × popularity + 0.3 × rating) normalise each to $[0,1]$ first, for example by dividing by the maximum in its category as `pop_in_my_categories` does. A cleaner solution, and the one the repository eventually adopts, is to feed each score to a learned ranker as a separate feature and let it find the weights.
-
-### Count users, not just events
-
-A single enthusiastic shopper who clicks the same product 40 times inflates its popularity by 40. Some systems therefore count *distinct users* instead of events, or cap each user's contribution to an item. Our baseline sums raw event weights for simplicity, which also makes it vulnerable to bots and to seller-run click farms, a reason real platforms filter suspicious traffic before it reaches the counters.
+Scales of `pop_7d`, `pop_decay` and a $[1,5]$ rating are not comparable: normalise to $[0,1]$ before blending, or feed each to a ranker as a separate feature. And count distinct users (or cap each user's contribution), since one shopper clicking 40 times inflates a score by 40.
 
 ### Popularity as a candidate source and as a feature
 
-The baselines in this chapter are not museum pieces. In the production design of this repository they survive in three roles:
-
-1. **Fallback**: the "trending" retriever supplies candidates to users with no history, and the Rust API's fallback query (top items by recent orders) serves the home page when the Python service is down.
-2. **Candidate source**: "popular in the categories you like" is the `catpop` retriever of Chapter 8, nearly the same code as method 5.
-3. **Feature**: the ranker receives smoothed popularity, CTR and conversion of each item as columns, and decides how much to trust them.
-
-::: tip
-Keep your baselines running in production, even when a better model exists. A baseline shown to a small percentage of traffic (a "holdout") tells you whether the model still earns its keep, and gives you a safe fallback when something breaks.
-:::
+In this repository baselines survive in three roles: a **fallback** (the trending retriever for users without history, and the Rust API's top-recent-orders query when Python is down), a **candidate source** (`catpop` in Chapter 8 is nearly method 5), and a **feature** (smoothed popularity, CTR and conversion columns the ranker weighs itself).
 
 ## Summary
 
