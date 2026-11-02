@@ -24,7 +24,10 @@ def shot(page: Page, name: str, *, selector: str | None = None, full_page: bool 
     path = OUT / name
     page.wait_for_timeout(400)  # let transitions settle
     if selector:
+        # The sticky navbar would be drawn over an element scrolled to the top of the viewport.
+        handle = page.add_style_tag(content="header, nav { position: static !important; }")
         page.locator(selector).first.screenshot(path=str(path))
+        handle.evaluate("el => el.remove()")
     else:
         page.screenshot(path=str(path), full_page=full_page)
     print(f"  {path.relative_to(OUT.parent.parent)}")
