@@ -318,7 +318,7 @@ cd book && uv run python tools/run_all.py --only ch13_profile
 file: results/ch13_profile.txt
 ```
 
-The per-user table shows totals of 757 to 804 ms for users with 4, 22 and 133 interactions. `History.at` costs about 14 ms, `generate` 234 to 254 ms and `features` 490 to 544 ms; `score`, `rerank` and `shap` together are a few milliseconds. `covisitation_matrix` (26 ms) and `item_features` (139 ms) are catalogue-wide work recomputed on every request. The model is the cheap part.
+The per-user table shows totals of 668 to 674 ms for users with 4, 22 and 133 interactions. `History.at` costs 8 to 9 ms, `generate` 213 to 215 ms and `features` 437 to 443 ms; `score`, `rerank` and `shap` together are a few milliseconds. The second section opens up `features.build`. Two kinds of work hide in there. Item-level work, the same for every user, is `item_features` (122 ms) plus `covisitation_matrix` (23 ms, inside `generate`): 144 ms in total. The larger part is user-side aggregation: `user_features` (57 ms), `user_item_features` (152 ms), `user_category_features` (57 ms), `user_shop_features` (26 ms) and `user_price_level` (11 ms) each aggregate *all users'* events, although only one user asked, and only afterwards are the rows joined to that user's candidates. That adds up to 303 ms. The model is the cheap part.
 
 ## Results
 
@@ -328,9 +328,9 @@ The per-user table shows totals of 757 to 804 ms for users with 4, 22 and 133 in
 
 The histogram shows a compact body between about 770 and 900 ms, and a short tail reaching about 1,010 ms. The median is 839.9 ms, the 90th percentile 892.5 ms and the 99th 985.0 ms. Two observations matter.
 
-First, **latency barely depends on the user**. The profile explains it: `generate` plus `features.build` take 97% of the request on average, candidate counts are 95 to 112 whatever the history, and the catalogue-wide frames inside them are recomputed on every call. Scoring, re-ranking and SHAP take about ten milliseconds together.
+First, **latency barely depends on the user**. The profile explains it: `generate` plus `features.build` take 97% of the request on average, candidate counts are 95 to 112 whatever the history, and the work inside them is recomputed on every call: item-level frames and, more expensively, user-side aggregations over every user's events. Scoring, re-ranking and SHAP take about ten milliseconds together.
 
-Second, **0.84 s is fine for a demo and too slow for a real home page**. Even the slowest observed call (1,010.6 ms) uses about a fifth of the 5-second budget, but a shopper will notice. The obvious fix, also the plan's contingency, is to cache the item-level frames (co-visitation matrix and item features) for about 30 seconds and recompute only user-specific parts per request; item statistics then lag by up to 30 s while the shopper's *own* clicks stay live.
+Second, **0.84 s is fine for a demo and too slow for a real home page**. Even the slowest observed call (1,010.6 ms) uses about a fifth of the 5-second budget, but a shopper will notice. The profile says the fix has two parts. Caching the item-level frames (co-visitation matrix and item features) for about 30 seconds would remove the 144 ms of item-level work; item statistics then lag by up to 30 s while the shopper's *own* clicks stay live. But that alone leaves the larger 303 ms: the user-side aggregations must also be restricted to the requesting user's events *before* aggregating, instead of aggregating every user and joining afterwards. A cache by itself does not fix the latency.
 
 ### A screenshot tour
 
@@ -379,7 +379,7 @@ The screenshots come from the running application, captured with Playwright. The
 - A single `.proto` file is the contract; Rust generates a client in `build.rs`, Python generates stubs with `recsys gen-proto`, and responses carry the model version, candidate count and latency for observability.
 - Retraining is periodic and on demand, guarded by a non-blocking lock and hot-swapped by assigning two references, so serving never pauses.
 - The Rust API hydrates ids into cards in the recommender's order and falls back to a non-personalised trending query on error or timeout, so a recommender outage degrades the page instead of breaking it.
-- Measured on this machine, `Recommend` takes about 840 ms at the median and 985 ms at the 99th percentile, almost independent of the user. A stage profile attributes 97% of it to candidate generation and feature building, whose catalogue-wide frames a short-TTL cache would attack first.
+- Measured on this machine, `Recommend` takes about 840 ms at the median and 985 ms at the 99th percentile, almost independent of the user. A stage profile attributes 97% of it to candidate generation and feature building: 144 ms of item-level work a short-TTL cache can absorb, and 303 ms of user-side aggregations over all users that only filtering events to the requesting user removes.
 
 ## Quiz
 

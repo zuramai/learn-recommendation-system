@@ -302,7 +302,7 @@ The screenshot above is the "The model" panel of `/how-it-works`: the model vers
 
 If you want to carry this project forward, here is a prioritised checklist. Each item is small enough for a weekend and teaches one idea from this chapter.
 
-1. **Cache item-level frames.** The 840 ms median in Chapter 13 suggests that most of the request is spent recomputing item-level statistics for every user. Cache those for a short TTL, key them on the cache time, and measure again. Expect the largest single gain for the least code.
+1. **Cache item-level frames and filter events per user.** The profile in Chapter 13 splits the request into two costs: item-level frames (`item_features`, `covisitation_matrix`) recomputed on every call, and user-side aggregations computed over every user's events although only one user asked, the larger share. Cache the item-level frames for a short TTL, keyed on the cache time, and filter events to the requesting user before the user-side aggregations. Measure after each part; neither alone removes the cost.
 2. **Log the exposure.** Make `Recommend` write a row per displayed item (request id, model version, rank, score, features). Train on exposure instead of reconstructing it, and use it for propensity weighting.
 3. **Add a holdout and a mini A/B framework.** Hash `user_id` into buckets; send 5% to the popularity fallback; log the bucket on every event; build a page that applies the z-test from this chapter to order conversion.
 4. **Split the label into heads.** Train separate click, cart and order models (three LightGBM models are enough), expose the blend weights in configuration, and compare against the single graded label.

@@ -318,7 +318,7 @@ cd book && uv run python tools/run_all.py --only ch13_profile
 file: results/ch13_profile.txt
 ```
 
-Tabel per pengguna menunjukkan total 757 sampai 804 ms untuk pengguna dengan 4, 22, dan 133 interaksi. `History.at` memakan sekitar 14 ms, `generate` 234 sampai 254 ms, dan `features` 490 sampai 544 ms; `score`, `rerank`, dan `shap` bersama-sama hanya beberapa milidetik. `covisitation_matrix` (26 ms) dan `item_features` (139 ms) adalah pekerjaan seluruh katalog yang dihitung ulang pada setiap permintaan. Modelnya adalah bagian yang murah.
+Tabel per pengguna menunjukkan total 668 sampai 674 ms untuk pengguna dengan 4, 22, dan 133 interaksi. `History.at` memakan 8 sampai 9 ms, `generate` 213 sampai 215 ms, dan `features` 437 sampai 443 ms; `score`, `rerank`, dan `shap` bersama-sama hanya beberapa milidetik. Bagian kedua membedah `features.build`. Ada dua jenis pekerjaan di dalamnya. Pekerjaan tingkat item, yang sama untuk setiap pengguna, adalah `item_features` (122 ms) ditambah `covisitation_matrix` (23 ms, di dalam `generate`): total 144 ms. Bagian yang lebih besar adalah agregasi sisi pengguna: `user_features` (57 ms), `user_item_features` (152 ms), `user_category_features` (57 ms), `user_shop_features` (26 ms), dan `user_price_level` (11 ms) masing-masing mengagregasi event *semua pengguna*, padahal hanya satu pengguna yang meminta, dan baru sesudahnya barisnya digabungkan ke kandidat pengguna itu. Jumlahnya 303 ms. Modelnya adalah bagian yang murah.
 
 ## Hasil
 
@@ -328,9 +328,9 @@ Tabel per pengguna menunjukkan total 757 sampai 804 ms untuk pengguna dengan 4, 
 
 Histogram menunjukkan badan yang rapat antara sekitar 770 dan 900 ms, serta ekor pendek yang mencapai sekitar 1,010 ms. Mediannya 839.9 ms, persentil ke-90 892.5 ms, dan ke-99 985.0 ms. Ada dua pengamatan penting.
 
-Pertama, **latensi nyaris tidak bergantung pada pengguna**. Profil menjelaskannya: `generate` plus `features.build` memakan rata-rata 97% dari permintaan, jumlah kandidat 95 sampai 112 apa pun riwayatnya, dan *frame* seluruh katalog di dalamnya dihitung ulang pada setiap panggilan. Penilaian, *re-ranking*, dan SHAP bersama-sama memakan sekitar sepuluh milidetik.
+Pertama, **latensi nyaris tidak bergantung pada pengguna**. Profil menjelaskannya: `generate` plus `features.build` memakan rata-rata 97% dari permintaan, jumlah kandidat 95 sampai 112 apa pun riwayatnya, dan pekerjaan di dalamnya dihitung ulang pada setiap panggilan: *frame* tingkat item dan, yang lebih mahal, agregasi sisi pengguna atas event seluruh pengguna. Penilaian, *re-ranking*, dan SHAP bersama-sama memakan sekitar sepuluh milidetik.
 
-Kedua, **0.84 dtk cukup untuk demo dan terlalu lambat untuk beranda sungguhan**. Bahkan panggilan teramati yang paling lambat (1,010.6 ms) hanya memakai sekitar seperlima dari anggaran 5 detik, tetapi pembeli akan merasakannya. Perbaikan yang jelas, yang juga merupakan rencana kontingensi, adalah meng-*cache* *frame* tingkat item (matriks co-visitation dan fitur item) selama sekitar 30 detik dan hanya menghitung ulang bagian spesifik pengguna per permintaan; statistik item lalu tertinggal hingga 30 dtk sementara klik *milik pembeli sendiri* tetap langsung.
+Kedua, **0.84 dtk cukup untuk demo dan terlalu lambat untuk beranda sungguhan**. Bahkan panggilan teramati yang paling lambat (1,010.6 ms) hanya memakai sekitar seperlima dari anggaran 5 detik, tetapi pembeli akan merasakannya. Profil menunjukkan bahwa perbaikannya punya dua bagian. Meng-*cache* *frame* tingkat item (matriks co-visitation dan fitur item) selama sekitar 30 detik akan menghilangkan 144 ms pekerjaan tingkat item; statistik item lalu tertinggal hingga 30 dtk sementara klik *milik pembeli sendiri* tetap langsung. Namun itu saja menyisakan 303 ms yang lebih besar: agregasi sisi pengguna juga harus dibatasi pada event pengguna yang meminta *sebelum* diagregasi, bukan mengagregasi semua pengguna lalu menggabungkan. *Cache* saja tidak memperbaiki latensi.
 
 ### Tur screenshot
 
@@ -379,7 +379,7 @@ Screenshot berasal dari aplikasi yang berjalan, diambil dengan Playwright. Halam
 - Satu berkas `.proto` adalah kontraknya; Rust menghasilkan klien di `build.rs`, Python menghasilkan stub dengan `recsys gen-proto`, dan respons membawa versi model, jumlah kandidat, dan latensi untuk observabilitas.
 - Pelatihan ulang bersifat periodik dan sesuai permintaan, dijaga oleh *lock* non-blocking dan di-*hot-swap* dengan menugaskan dua referensi, sehingga *serving* tidak pernah berhenti.
 - API Rust menghidrasi id menjadi kartu menurut urutan recommender dan beralih ke query *trending* nonpersonal saat error atau *timeout*, sehingga gangguan recommender menurunkan halaman alih-alih merusaknya.
-- Diukur di mesin ini, `Recommend` memakan sekitar 840 ms pada median dan 985 ms pada persentil ke-99, hampir tidak bergantung pada pengguna. Profil tahap mengaitkan 97% darinya dengan pembuatan kandidat dan pembangunan fitur, yang *frame* seluruh katalognya akan diserang lebih dulu oleh *cache* ber-TTL pendek.
+- Diukur di mesin ini, `Recommend` memakan sekitar 840 ms pada median dan 985 ms pada persentil ke-99, hampir tidak bergantung pada pengguna. Profil tahap mengaitkan 97% darinya dengan pembuatan kandidat dan pembangunan fitur: 144 ms pekerjaan tingkat item yang bisa diserap *cache* ber-TTL pendek, dan 303 ms agregasi sisi pengguna atas semua pengguna yang hanya bisa dihilangkan dengan menyaring event ke pengguna yang meminta.
 
 ## Kuis
 
