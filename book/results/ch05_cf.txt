@@ -1,0 +1,37 @@
+
+=== Setup ===
+interaction matrix: 1408 users x 2120 items, 18256 non-zero cells, density 0.612%
+eval users: 947   recommendable (in-stock) items: 2311
+eval users with history before the cutoff: 919  (the rest get 7-day popularity)
+
+=== User-kNN (cosine, neighbours k) ===
+k=10   ndcg@20 0.1456  recall@20 0.1740
+k=25   ndcg@20 0.1601  recall@20 0.2072
+k=50   ndcg@20 0.1662  recall@20 0.2273
+k=100  ndcg@20 0.1702  recall@20 0.2419
+example: strongest neighbours of the first user with history
+  user 1: user 328 (cos 0.703), user 964 (cos 0.380), user 1479 (cos 0.284)
+
+=== Item-kNN (cosine between item columns) ===
+item-item similarity: 2120 x 2120, mean non-zero similarity 0.0772, max 1.000
+example: most similar items to item 1769 ('Sakura Earphones Original'):
+  item 1064  cos 0.538  'Volt Instant Noodles Lokal'
+  item 956   cos 0.497  'Bamboo Snacks Best Seller'
+  item 2322  cos 0.497  'Sakura Instant Noodles Pro'
+
+=== Session co-visitation (seeded with the user's decayed recent items) ===
+co-visitation pairs: 13632   seeds per user <= 10
+
+=== Padding with 7-day popularity (users/slots the method could not fill) ===
+pop_7d     no-score users    0  partially padded    0  slots padded 0.0%
+user_knn   no-score users   29  partially padded    1  slots padded 3.1%
+item_knn   no-score users   29  partially padded    1  slots padded 3.1%
+covisit    no-score users   30  partially padded  117  slots padded 8.6%
+
+=== Results (top-50 lists, evaluated at K=20) ===
+          recall@5  recall@10  recall@20  recall@50  order_recall@20  ndcg@20  coverage@20
+method                                                                                    
+pop_7d      0.0310     0.0493     0.0786     0.1335           0.1066   0.0475       0.0087
+user_knn    0.1230     0.1755     0.2273     0.3163           0.3456   0.1662       0.4158
+item_knn    0.0460     0.1001     0.1692     0.2934           0.2772   0.0925       0.8399
+covisit     0.0795     0.1319     0.2069     0.3220           0.2999   0.1197       0.6460
