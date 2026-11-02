@@ -24,14 +24,14 @@ watch(() => route.params.id, load, { immediate: true })
 </script>
 
 <template>
-  <p v-if="error" class="rounded bg-red-100 p-2 text-sm text-red-700">{{ error }}</p>
+  <p v-if="error" class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{{ error }}</p>
   <template v-if="shop">
-    <div class="mb-4 rounded-lg bg-white p-4 shadow-sm">
-      <h1 class="text-xl font-semibold">
+    <div class="mb-4 card p-4">
+      <h1 class="text-xl font-semibold tracking-tight">
         {{ shop.name }}
-        <span v-if="shop.is_mall" class="ml-2 rounded bg-red-500 px-1.5 py-0.5 text-xs text-white">Mall</span>
+        <span v-if="shop.is_mall" class="ml-2 rounded bg-rose-400 px-1.5 py-0.5 text-xs text-white">Mall</span>
       </h1>
-      <p class="text-sm text-gray-500">
+      <p class="text-sm text-neutral-500">
         {{ shop.city }} · ⭐ {{ shop.shop_rating.toFixed(1) }} · {{ shop.product_count ?? 0 }} products
       </p>
     </div>

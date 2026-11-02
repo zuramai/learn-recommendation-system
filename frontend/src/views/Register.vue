@@ -22,16 +22,16 @@ async function submit() {
 </script>
 
 <template>
-  <form class="mx-auto max-w-sm space-y-3 rounded bg-white p-6 shadow-sm" @submit.prevent="submit">
-    <h1 class="text-xl font-semibold">Register</h1>
-    <input v-model="form.name" required placeholder="Name" class="w-full rounded border px-3 py-2" />
-    <input v-model="form.email" type="email" required placeholder="Email" class="w-full rounded border px-3 py-2" />
-    <input v-model="form.password" type="password" required minlength="8" placeholder="Password (min 8 chars)" class="w-full rounded border px-3 py-2" />
-    <select v-model="form.city" class="w-full rounded border px-3 py-2">
+  <form class="mx-auto max-w-sm space-y-3 card p-6" @submit.prevent="submit">
+    <h1 class="text-xl font-semibold tracking-tight">Register</h1>
+    <input v-model="form.name" required placeholder="Name" class="input" />
+    <input v-model="form.email" type="email" required placeholder="Email" class="input" />
+    <input v-model="form.password" type="password" required minlength="8" placeholder="Password (min 8 chars)" class="input" />
+    <select v-model="form.city" class="input">
       <option v-for="c in CITIES" :key="c" :value="c">{{ c }}</option>
     </select>
-    <p v-if="error" class="text-sm text-red-600">{{ error }}</p>
-    <button class="w-full rounded bg-orange-500 py-2 font-medium text-white">Create account</button>
-    <p class="text-sm">Have an account? <RouterLink to="/login" class="text-orange-600 underline">Login</RouterLink></p>
+    <p v-if="error" class="text-sm text-rose-600">{{ error }}</p>
+    <button class="btn-primary w-full">Create account</button>
+    <p class="text-sm">Have an account? <RouterLink to="/login" class="text-primary-600 hover:text-primary-700 hover:underline">Login</RouterLink></p>
   </form>
 </template>

@@ -22,15 +22,15 @@ async function submit() {
 </script>
 
 <template>
-  <form class="mx-auto max-w-sm space-y-3 rounded bg-white p-6 shadow-sm" @submit.prevent="submit">
-    <h1 class="text-xl font-semibold">Login</h1>
-    <div class="rounded bg-blue-50 p-2 text-xs text-blue-800">
+  <form class="mx-auto max-w-sm space-y-3 card p-6" @submit.prevent="submit">
+    <h1 class="text-xl font-semibold tracking-tight">Login</h1>
+    <div class="rounded bg-primary-50 p-2 text-xs text-primary-800">
       Demo: user43@demo.test / password, seller1@demo.test / password, admin@demo.test / password
     </div>
-    <input v-model="email" type="email" required placeholder="Email" class="w-full rounded border px-3 py-2" />
-    <input v-model="password" type="password" required placeholder="Password" class="w-full rounded border px-3 py-2" />
-    <p v-if="error" class="text-sm text-red-600">{{ error }}</p>
-    <button class="w-full rounded bg-orange-500 py-2 font-medium text-white">Login</button>
-    <p class="text-sm">No account? <RouterLink to="/register" class="text-orange-600 underline">Register</RouterLink></p>
+    <input v-model="email" type="email" required placeholder="Email" class="input" />
+    <input v-model="password" type="password" required placeholder="Password" class="input" />
+    <p v-if="error" class="text-sm text-rose-600">{{ error }}</p>
+    <button class="btn-primary w-full">Login</button>
+    <p class="text-sm">No account? <RouterLink to="/register" class="text-primary-600 hover:text-primary-700 hover:underline">Register</RouterLink></p>
   </form>
 </template>

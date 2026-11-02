@@ -15,7 +15,7 @@ const EMOJI: Record<string, string> = {
   Pets: '🐾',
 }
 const emoji = computed(() => EMOJI[categoryParent(props.categoryId)] ?? '🛍️')
-const bg = computed(() => `hsl(${(props.id * 47) % 360} 70% 85%)`)
+const bg = computed(() => `hsl(${(props.id * 47) % 360} 30% 94%)`)
 </script>
 
 <template>
@@ -24,6 +24,6 @@ const bg = computed(() => `hsl(${(props.id * 47) % 360} 70% 85%)`)
     :style="{ background: bg }"
   >
     <span class="text-5xl">{{ emoji }}</span>
-    <span class="max-w-full truncate px-2 text-xs font-semibold text-gray-700">{{ brand }}</span>
+    <span class="max-w-full truncate px-2 text-xs font-semibold text-neutral-700">{{ brand }}</span>
   </div>
 </template>

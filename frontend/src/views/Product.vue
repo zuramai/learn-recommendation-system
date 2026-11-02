@@ -96,39 +96,39 @@ async function addToCart() {
 </script>
 
 <template>
-  <p v-if="error && !item" class="rounded bg-red-100 p-2 text-sm text-red-700">{{ error }}</p>
+  <p v-if="error && !item" class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{{ error }}</p>
   <template v-if="item">
-    <div class="grid gap-6 rounded-lg bg-white p-4 shadow-sm md:grid-cols-[320px_1fr]">
+    <div class="grid gap-6 card p-4 md:grid-cols-[320px_1fr]">
       <ProductImage :id="item.id" :brand="item.brand" :category-id="item.category_id" />
       <div>
         <h1 class="text-2xl font-semibold">{{ item.title }}</h1>
-        <p class="text-sm text-gray-500">
+        <p class="text-sm text-neutral-500">
           {{ item.brand }} · {{ item.category_name }} · ⭐ {{ item.rating_avg.toFixed(1) }} ({{ item.rating_count }})
         </p>
-        <div class="mt-3 text-3xl font-bold text-orange-600">{{ formatIDR(item.final_price) }}</div>
-        <div v-if="item.discount_pct > 0" class="text-sm text-gray-400">
+        <div class="mt-3 text-3xl font-bold text-primary-600">{{ formatIDR(item.final_price) }}</div>
+        <div v-if="item.discount_pct > 0" class="text-sm text-neutral-400">
           <span class="line-through">{{ formatIDR(item.price) }}</span>
-          <span class="ml-2 rounded bg-red-100 px-1 text-red-600">-{{ Math.round(item.discount_pct * 100) }}%</span>
+          <span class="ml-2 rounded bg-rose-50 px-1 text-rose-600">-{{ Math.round(item.discount_pct * 100) }}%</span>
         </div>
-        <p v-if="item.free_shipping" class="mt-1 text-sm text-green-600">Free shipping</p>
-        <p class="mt-3 text-sm text-gray-700">{{ item.description }}</p>
+        <p v-if="item.free_shipping" class="mt-1 text-sm text-emerald-600">Free shipping</p>
+        <p class="mt-3 text-sm text-neutral-700">{{ item.description }}</p>
         <p class="mt-3 text-sm">
           Sold by
-          <RouterLink :to="`/shops/${item.shop.id}`" class="font-medium text-orange-600 underline">{{
+          <RouterLink :to="`/shops/${item.shop.id}`" class="font-medium text-primary-600 hover:text-primary-700 hover:underline">{{
             item.shop.name
           }}</RouterLink>
           ({{ item.shop.city }})
         </p>
         <div class="mt-4 flex items-center gap-3">
           <template v-if="item.stock > 0">
-            <input v-model.number="qty" type="number" min="1" :max="item.stock" class="w-20 rounded border px-2 py-1" />
-            <button class="rounded bg-orange-500 px-4 py-2 font-medium text-white" @click="addToCart">Add to cart</button>
-            <span class="text-sm text-gray-500">{{ item.stock }} in stock</span>
+            <input v-model.number="qty" type="number" min="1" :max="item.stock" class="w-20 input !w-20" />
+            <button class="btn-primary" @click="addToCart">Add to cart</button>
+            <span class="text-sm text-neutral-500">{{ item.stock }} in stock</span>
           </template>
-          <span v-else class="font-medium text-red-500">Out of stock</span>
+          <span v-else class="font-medium text-rose-500">Out of stock</span>
         </div>
-        <p v-if="error" class="mt-2 text-sm text-red-600">{{ error }}</p>
-        <p v-if="added" class="mt-2 text-sm text-green-600">
+        <p v-if="error" class="mt-2 text-sm text-rose-600">{{ error }}</p>
+        <p v-if="added" class="mt-2 text-sm text-emerald-600">
           Added to cart. <RouterLink to="/cart" class="underline">View cart</RouterLink>
         </p>
       </div>
@@ -136,7 +136,7 @@ async function addToCart() {
 
     <h2 class="mb-2 mt-6 text-lg font-semibold">Similar items</h2>
     <template v-if="similar">
-      <p v-if="similar.fallback" class="mb-2 text-xs text-yellow-700">Recommender offline — showing popular items in this category</p>
+      <p v-if="similar.fallback" class="mb-2 text-xs text-amber-700">Recommender offline — showing popular items in this category</p>
       <ProductGrid :key="item.id" :items="similar.items" :recs="similar.items" surface="similar" />
     </template>
   </template>

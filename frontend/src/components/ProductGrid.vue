@@ -27,7 +27,7 @@ const recById = computed(() => new Map((props.recs ?? []).map((r) => [r.id, r]))
 </script>
 
 <template>
-  <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+  <div class="grid grid-cols-2 items-start gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
     <ProductCard
       v-for="(item, i) in items"
       :key="item.id"

@@ -21,34 +21,35 @@ async function logout() {
 </script>
 
 <template>
-  <header class="sticky top-0 z-10 bg-orange-500 text-white shadow">
-    <div class="mx-auto flex max-w-6xl items-center gap-4 px-4 py-3">
-      <RouterLink to="/" class="text-xl font-bold">🛍️ Marketplace</RouterLink>
+  <header class="sticky top-0 z-10 border-b border-neutral-200 bg-white/90 backdrop-blur">
+    <div class="mx-auto flex max-w-6xl items-center gap-6 px-4 py-3">
+      <RouterLink to="/" class="flex items-center gap-2 text-lg font-semibold tracking-tight text-neutral-900">
+        <span class="flex h-7 w-7 items-center justify-center rounded-lg bg-primary-600 text-sm text-white">M</span>
+        Marketplace
+      </RouterLink>
       <form class="flex-1" @submit.prevent="search">
         <input
           v-model="q"
           type="search"
           placeholder="Search products or categories"
-          class="w-full rounded px-3 py-1.5 text-gray-900 outline-none"
+          class="w-full max-w-xl rounded-full border border-transparent bg-neutral-100 px-4 py-2 text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-primary-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary-500/20"
         />
       </form>
-      <nav class="flex items-center gap-4 text-sm">
-        <RouterLink to="/how-it-works" class="hover:underline">How it works</RouterLink>
-        <RouterLink to="/seller" class="hover:underline">Seller Center</RouterLink>
-        <RouterLink to="/cart" class="hover:underline">
-          🛒 Cart
-          <span v-if="cart.count" class="ml-1 rounded-full bg-white px-1.5 text-xs font-semibold text-orange-600">{{
-            cart.count
-          }}</span>
+      <nav class="flex items-center gap-1 text-sm text-neutral-600">
+        <RouterLink to="/how-it-works" class="rounded-lg px-3 py-1.5 hover:bg-neutral-100 hover:text-neutral-900" active-class="!text-primary-700 bg-primary-50">How it works</RouterLink>
+        <RouterLink to="/seller" class="rounded-lg px-3 py-1.5 hover:bg-neutral-100 hover:text-neutral-900" active-class="!text-primary-700 bg-primary-50">Seller Center</RouterLink>
+        <RouterLink to="/cart" class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 hover:bg-neutral-100 hover:text-neutral-900" active-class="!text-primary-700 bg-primary-50">
+          Cart
+          <span v-if="cart.count" class="rounded-full bg-primary-600 px-1.5 py-0.5 text-[11px] font-semibold leading-none text-white">{{ cart.count }}</span>
         </RouterLink>
         <template v-if="auth.user">
-          <RouterLink to="/orders" class="hover:underline">Orders</RouterLink>
-          <span class="font-medium">{{ auth.user.name }}</span>
-          <button class="rounded bg-white/20 px-2 py-1 hover:bg-white/30" @click="logout">Logout</button>
+          <RouterLink to="/orders" class="rounded-lg px-3 py-1.5 hover:bg-neutral-100 hover:text-neutral-900" active-class="!text-primary-700 bg-primary-50">Orders</RouterLink>
+          <span class="ml-2 border-l border-neutral-200 pl-4 font-medium text-neutral-900">{{ auth.user.name }}</span>
+          <button class="btn-secondary !px-3 !py-1.5" @click="logout">Logout</button>
         </template>
         <template v-else>
-          <RouterLink to="/login" class="hover:underline">Login</RouterLink>
-          <RouterLink to="/register" class="rounded bg-white px-2 py-1 font-medium text-orange-600">Register</RouterLink>
+          <RouterLink to="/login" class="rounded-lg px-3 py-1.5 hover:bg-neutral-100 hover:text-neutral-900">Login</RouterLink>
+          <RouterLink to="/register" class="btn-primary !px-3 !py-1.5">Register</RouterLink>
         </template>
       </nav>
     </div>

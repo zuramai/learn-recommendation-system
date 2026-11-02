@@ -36,13 +36,13 @@ function setQuery(patch: Record<string, string>) {
 
 <template>
   <div class="mb-3 flex items-center justify-between">
-    <h1 class="text-xl font-semibold">
+    <h1 class="text-xl font-semibold tracking-tight">
       {{ q ? `Results for “${q}”` : 'Products' }}
-      <span v-if="data" class="text-sm font-normal text-gray-500">({{ data.total }})</span>
+      <span v-if="data" class="text-sm font-normal text-neutral-500">({{ data.total }})</span>
     </h1>
     <select
       :value="sort"
-      class="rounded border bg-white px-2 py-1 text-sm"
+      class="input !w-auto"
       @change="setQuery({ sort: ($event.target as HTMLSelectElement).value, page: '1' })"
     >
       <option value="popular">Popular</option>
@@ -52,16 +52,16 @@ function setQuery(patch: Record<string, string>) {
       <option value="price_desc">Price: high to low</option>
     </select>
   </div>
-  <p v-if="error" class="rounded bg-red-100 p-2 text-sm text-red-700">{{ error }}</p>
+  <p v-if="error" class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{{ error }}</p>
   <template v-if="data">
-    <p v-if="!data.items.length" class="py-10 text-center text-gray-500">No products found.</p>
+    <p v-if="!data.items.length" class="py-10 text-center text-neutral-500">No products found.</p>
     <ProductGrid :key="route.fullPath" :items="data.items" surface="search" />
     <div class="mt-6 flex items-center justify-center gap-3 text-sm">
-      <button class="rounded bg-white px-3 py-1 shadow-sm disabled:opacity-40" :disabled="page <= 1" @click="setQuery({ page: String(page - 1) })">
+      <button class="btn-secondary" :disabled="page <= 1" @click="setQuery({ page: String(page - 1) })">
         Prev
       </button>
       <span>Page {{ page }} / {{ pages }}</span>
-      <button class="rounded bg-white px-3 py-1 shadow-sm disabled:opacity-40" :disabled="page >= pages" @click="setQuery({ page: String(page + 1) })">
+      <button class="btn-secondary" :disabled="page >= pages" @click="setQuery({ page: String(page + 1) })">
         Next
       </button>
     </div>

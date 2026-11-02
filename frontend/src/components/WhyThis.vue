@@ -21,24 +21,24 @@ const describe = (f: string) => featureDescriptions.value[f]?.description ?? f
 </script>
 
 <template>
-  <div class="mt-2 rounded border border-orange-200 bg-orange-50 p-2 text-xs">
+  <div class="mt-2 rounded-lg border border-neutral-200 bg-neutral-50 p-3 text-xs">
     <p>
       <span class="font-semibold">Because:</span> {{ SOURCES[rec.source] ?? rec.source }}
     </p>
-    <p class="text-gray-500">score {{ rec.score.toFixed(3) }} · rank #{{ rec.rank }}</p>
+    <p class="text-neutral-500">score {{ rec.score.toFixed(3) }} · rank #{{ rec.rank }}</p>
     <ul v-if="rec.contributions.length" class="mt-1 space-y-1.5">
       <li v-for="c in rec.contributions" :key="c.feature">
-        <div class="leading-tight text-gray-700" :title="c.feature">{{ describe(c.feature) }}</div>
+        <div class="leading-tight text-neutral-700" :title="c.feature">{{ describe(c.feature) }}</div>
         <div class="flex items-center gap-2">
-          <span class="w-12 shrink-0 text-gray-500">{{ c.value.toFixed(2) }}</span>
-          <div class="h-2 flex-1 rounded bg-gray-200">
+          <span class="w-12 shrink-0 text-neutral-500">{{ c.value.toFixed(2) }}</span>
+          <div class="h-2 flex-1 rounded bg-neutral-200">
             <div
               class="h-2 rounded"
-              :class="c.contribution >= 0 ? 'bg-green-500' : 'bg-red-500'"
+              :class="c.contribution >= 0 ? 'bg-emerald-400' : 'bg-rose-400'"
               :style="{ width: (Math.abs(c.contribution) / maxAbs) * 100 + '%' }"
             />
           </div>
-          <span class="w-12 shrink-0 text-right" :class="c.contribution >= 0 ? 'text-green-700' : 'text-red-700'">
+          <span class="w-12 shrink-0 text-right" :class="c.contribution >= 0 ? 'text-emerald-700' : 'text-rose-700'">
             {{ c.contribution >= 0 ? '+' : '−' }}{{ Math.abs(c.contribution).toFixed(2) }}
           </span>
         </div>

@@ -117,16 +117,16 @@ onMounted(async () => {
 </script>
 
 <template>
-  <h1 class="mb-3 text-xl font-semibold">Seller Center</h1>
-  <p v-if="error" class="mb-2 rounded bg-red-100 p-2 text-sm text-red-700">{{ error }}</p>
+  <h1 class="mb-3 text-xl font-semibold tracking-tight">Seller Center</h1>
+  <p v-if="error" class="mb-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{{ error }}</p>
 
-  <form v-if="loaded && !shop" class="max-w-sm space-y-3 rounded bg-white p-6 shadow-sm" @submit.prevent="createShop">
+  <form v-if="loaded && !shop" class="max-w-sm space-y-3 card p-6" @submit.prevent="createShop">
     <h2 class="font-semibold">Open your shop</h2>
-    <input v-model="shopForm.name" required placeholder="Shop name" class="w-full rounded border px-3 py-2" />
-    <select v-model="shopForm.city" class="w-full rounded border px-3 py-2">
+    <input v-model="shopForm.name" required placeholder="Shop name" class="input" />
+    <select v-model="shopForm.city" class="input">
       <option v-for="c in CITIES" :key="c" :value="c">{{ c }}</option>
     </select>
-    <button class="w-full rounded bg-orange-500 py-2 font-medium text-white">Create shop</button>
+    <button class="btn-primary w-full">Create shop</button>
   </form>
 
   <template v-if="shop">
@@ -135,7 +135,7 @@ onMounted(async () => {
         v-for="t in ['products', 'orders', 'info'] as const"
         :key="t"
         class="-mb-px border-b-2 px-3 py-2 text-sm capitalize"
-        :class="tab === t ? 'border-orange-500 font-semibold text-orange-600' : 'border-transparent text-gray-500'"
+        :class="tab === t ? 'border-primary-600 font-semibold text-primary-600' : 'border-transparent text-neutral-500'"
         @click="tab = t"
       >
         {{ t === 'info' ? 'Shop info' : t }}
@@ -143,8 +143,8 @@ onMounted(async () => {
     </div>
 
     <div v-if="tab === 'products'" class="grid gap-4 lg:grid-cols-[1fr_320px]">
-      <table class="h-fit w-full rounded bg-white text-sm shadow-sm">
-        <thead class="text-left text-gray-500">
+      <table class="h-fit w-full card overflow-hidden text-sm">
+        <thead class="th">
           <tr><th class="p-2">Title</th><th>Price</th><th>Stock</th><th>Status</th><th /></tr>
         </thead>
         <tbody>
@@ -154,60 +154,60 @@ onMounted(async () => {
             <td>{{ p.stock }}</td>
             <td>{{ p.is_active ? 'active' : 'inactive' }}</td>
             <td class="space-x-2 whitespace-nowrap p-2 text-right">
-              <button class="text-orange-600" @click="edit(p)">Edit</button>
-              <button v-if="p.is_active" class="text-red-500" @click="deactivate(p.id)">Deactivate</button>
+              <button class="text-primary-600" @click="edit(p)">Edit</button>
+              <button v-if="p.is_active" class="text-rose-500" @click="deactivate(p.id)">Deactivate</button>
             </td>
           </tr>
-          <tr v-if="!products.length"><td colspan="5" class="p-4 text-center text-gray-500">No products yet.</td></tr>
+          <tr v-if="!products.length"><td colspan="5" class="p-4 text-center text-neutral-500">No products yet.</td></tr>
         </tbody>
       </table>
-      <form class="space-y-2 rounded bg-white p-4 text-sm shadow-sm" @submit.prevent="save">
+      <form class="space-y-2 card p-4 text-sm" @submit.prevent="save">
         <h2 class="font-semibold">{{ editingId === null ? 'New product' : `Edit product #${editingId}` }}</h2>
-        <input v-model="form.title" required placeholder="Title" class="w-full rounded border px-2 py-1" />
-        <textarea v-model="form.description" placeholder="Description" rows="2" class="w-full rounded border px-2 py-1" />
-        <input v-model="form.brand" required placeholder="Brand" class="w-full rounded border px-2 py-1" />
-        <select v-model.number="form.category_id" class="w-full rounded border px-2 py-1">
+        <input v-model="form.title" required placeholder="Title" class="input" />
+        <textarea v-model="form.description" placeholder="Description" rows="2" class="input" />
+        <input v-model="form.brand" required placeholder="Brand" class="input" />
+        <select v-model.number="form.category_id" class="input">
           <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.parent_name }} › {{ c.name }}</option>
         </select>
         <label class="block">Price (IDR)
-          <input v-model.number="form.price" type="number" min="1" class="w-full rounded border px-2 py-1" /></label>
+          <input v-model.number="form.price" type="number" min="1" class="input" /></label>
         <label class="block">Discount (%, 0–50)
-          <input v-model.number="form.discount_pct" type="number" min="0" max="50" class="w-full rounded border px-2 py-1" /></label>
+          <input v-model.number="form.discount_pct" type="number" min="0" max="50" class="input" /></label>
         <label class="block">Stock
-          <input v-model.number="form.stock" type="number" min="0" class="w-full rounded border px-2 py-1" /></label>
+          <input v-model.number="form.stock" type="number" min="0" class="input" /></label>
         <label class="flex items-center gap-2"><input v-model="form.free_shipping" type="checkbox" /> Free shipping</label>
         <label v-if="editingId !== null" class="flex items-center gap-2"><input v-model="form.is_active" type="checkbox" /> Active</label>
         <div class="flex gap-2">
-          <button class="flex-1 rounded bg-orange-500 py-1.5 font-medium text-white">{{ editingId === null ? 'Create' : 'Save' }}</button>
-          <button v-if="editingId !== null" type="button" class="rounded border px-3" @click="reset">Cancel</button>
+          <button class="btn-primary flex-1">{{ editingId === null ? 'Create' : 'Save' }}</button>
+          <button v-if="editingId !== null" type="button" class="btn-secondary" @click="reset">Cancel</button>
         </div>
       </form>
     </div>
 
     <div v-else-if="tab === 'orders'" class="space-y-3">
-      <p v-if="!orders.length" class="rounded bg-white p-8 text-center text-gray-500">No orders yet.</p>
-      <div v-for="o in orders" :key="o.id" class="rounded bg-white p-4 shadow-sm">
+      <p v-if="!orders.length" class="card p-8 text-center text-neutral-500">No orders yet.</p>
+      <div v-for="o in orders" :key="o.id" class="card p-4">
         <div class="flex items-center justify-between">
           <div class="font-medium">Order #{{ o.id }} · {{ o.buyer_name }}</div>
-          <span class="rounded bg-gray-100 px-2 py-0.5 text-xs">{{ o.status }}</span>
+          <span class="badge bg-neutral-100 text-neutral-700">{{ o.status }}</span>
         </div>
         <ul class="mt-1 text-sm">
           <li v-for="l in o.items" :key="l.item_id">{{ l.quantity }} × {{ l.title }} — {{ formatIDR(l.unit_price) }}</li>
         </ul>
         <div class="mt-2 flex items-center justify-between">
           <b class="text-sm">Total {{ formatIDR(o.total) }}</b>
-          <button v-if="o.status === 'paid'" class="rounded bg-orange-500 px-3 py-1 text-sm text-white" @click="setStatus(o.id, 'shipped')">Mark shipped</button>
-          <button v-if="o.status === 'shipped'" class="rounded bg-green-600 px-3 py-1 text-sm text-white" @click="setStatus(o.id, 'completed')">Mark completed</button>
+          <button v-if="o.status === 'paid'" class="btn-primary !px-3 !py-1" @click="setStatus(o.id, 'shipped')">Mark shipped</button>
+          <button v-if="o.status === 'shipped'" class="btn !px-3 !py-1 bg-emerald-600 text-white hover:bg-emerald-700" @click="setStatus(o.id, 'completed')">Mark completed</button>
         </div>
       </div>
     </div>
 
-    <div v-else class="max-w-md rounded bg-white p-4 text-sm shadow-sm">
+    <div v-else class="max-w-md card p-4 text-sm">
       <h2 class="text-lg font-semibold">{{ shop.name }}</h2>
       <p>City: {{ shop.city }}</p>
       <p>Rating: ⭐ {{ shop.shop_rating.toFixed(1) }}</p>
       <p>Mall: {{ shop.is_mall ? 'yes' : 'no' }}</p>
-      <RouterLink :to="`/shops/${shop.id}`" class="mt-2 inline-block text-orange-600 underline">View public shop page</RouterLink>
+      <RouterLink :to="`/shops/${shop.id}`" class="mt-2 inline-block text-primary-600 hover:text-primary-700 hover:underline">View public shop page</RouterLink>
     </div>
   </template>
 </template>

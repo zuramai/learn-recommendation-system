@@ -33,24 +33,24 @@ onMounted(load)
       v-for="c in categories"
       :key="c.id"
       :to="{ path: '/search', query: { category_id: String(c.id) } }"
-      class="rounded-full bg-white px-3 py-1 text-sm shadow-sm hover:bg-orange-50"
+      class="rounded-full border border-neutral-200 bg-white px-3 py-1 text-sm text-neutral-700 hover:border-primary-200 hover:bg-primary-50 hover:text-primary-700"
       >{{ c.name }}</RouterLink
     >
   </div>
 
   <div class="mb-2 flex items-center justify-between">
-    <h1 class="text-xl font-semibold">{{ auth.user ? 'Recommended for you' : 'Popular now' }}</h1>
-    <button class="rounded bg-orange-500 px-3 py-1 text-sm text-white disabled:opacity-50" :disabled="loading" @click="load">
+    <h1 class="text-xl font-semibold tracking-tight">{{ auth.user ? 'Recommended for you' : 'Popular now' }}</h1>
+    <button class="btn-primary" :disabled="loading" @click="load">
       {{ loading ? 'Loading…' : 'Refresh' }}
     </button>
   </div>
 
-  <p v-if="error" class="mb-3 rounded bg-red-100 p-2 text-sm text-red-700">{{ error }}</p>
+  <p v-if="error" class="mb-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{{ error }}</p>
   <template v-if="data">
-    <div v-if="data.fallback" class="mb-3 rounded bg-yellow-100 p-2 text-sm text-yellow-800">
+    <div v-if="data.fallback" class="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
       Recommender offline — showing popular items
     </div>
-    <p v-else class="mb-3 text-xs text-gray-500">
+    <p v-else class="mb-3 text-xs text-neutral-500">
       model {{ data.model_version }} · {{ data.candidates_considered }} candidates · {{ data.latency_ms?.toFixed(0) }} ms
     </p>
     <ProductGrid :items="data.items" :recs="data.items" surface="home_feed" @hide="hide" />
