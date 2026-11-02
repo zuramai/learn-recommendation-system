@@ -2,30 +2,23 @@
 
 ## Nobody wrote the word "coffee" on that card
 
-It is a Tuesday evening and a buyer in Surabaya opens the product page of a coffee-and-tea gift set. She has not searched for anything. She is not going to read the description carefully either. What she wants to know, within about two seconds, is: *is there something better than this?* Underneath the product photo, a row titled "Similar items" fills up with five other coffee and tea listings. Nobody on the engineering team wrote a rule saying "coffee-set X goes with coffee-sets Y and Z". Nobody labelled the products either. The row is there because, over the last thirty days, many other shoppers who looked at this product in the same browsing session also looked at those five.
+It is a Tuesday evening and a buyer in Surabaya opens the product page of a coffee-and-tea gift set. Underneath the photo, a "Similar items" row fills with five other coffee and tea listings. Nobody wrote a rule saying "set X goes with sets Y and Z", and nobody labelled the products. The row is there because, over the last thirty days, many shoppers who looked at this product in the same browsing session also looked at those five.
 
 That is the central trick of **collaborative filtering** (CF): *the crowd already did the labelling for you*. Every click, cart and order is a vote. If you never look at a single title, price or photo, but you know who touched what and when, you can still say a surprising amount about which items belong together and which people share tastes.
 
-In Chapter 4 we did the opposite. Content-based filtering needed text, categories and brands, and it recommended things that *looked* like what the user had already seen. Collaborative filtering ignores what items are and looks only at the pattern of behaviour. This is why it surfaces items a content model would never connect, and also why it fails in a very particular way when behaviour data is thin.
-
-This chapter builds four collaborative methods on the same simulated marketplace and the same evaluation as the previous chapters, so you can compare their numbers directly with the popularity baseline from Chapter 3:
-
-- **User-kNN**: find the users most like you and recommend what they liked.
-- **Item-kNN**: find the items most like the ones you liked, where "like" means "touched by the same people".
-- **Session co-visitation**: items that show up together *inside one browsing session*. This is what the app's "Similar items" row uses, and it is one of the four candidate retrievers of the production pipeline in this repository.
-- A look at **scalability**: why the Amazon item-to-item design became the industry default, and what it costs.
+Chapter 4's content-based filtering needed text, categories and brands. Collaborative filtering looks only at the pattern of behaviour, so it connects items a content model never would, and fails in its own way when behaviour data is thin. We build four methods on the same simulated marketplace and evaluation as Chapter 3, so numbers compare directly with the popularity baseline: user-kNN, item-kNN, session co-visitation (what the app's "Similar items" row uses, and one of the repo's four retrievers), and a look at scalability.
 
 **What you'll learn**
 
-- How a user–item interaction matrix is built from implicit events, and why event weights matter.
-- The mechanics of user-kNN and item-kNN, with cosine and Jaccard similarity worked out by hand.
-- How the repo's `covisitation_matrix` works, why it normalises each row, and how a user's recent items turn it into personal recommendations.
-- How to read real results: why user-kNN wins on ndcg here, why item-kNN has the best coverage, and what padding tells you about a method's limits.
-- What changes when the catalogue grows from two thousand to tens of millions of items.
+- How a user–item matrix is built from implicit events.
+- User-kNN and item-kNN, with cosine and Jaccard worked out by hand.
+- How the repo's `covisitation_matrix` works and why it normalises each row.
+- How to read real results: ndcg, coverage and popularity padding.
+- Why item-to-item designs scale.
 
 ## The intuition: asking people with similar taste
 
-Think about how you pick a restaurant in a new city. You could read the menu (content-based). Or you could ask a friend whose taste you trust: "You liked that ramen place and the little cafe near the station, what else should I try?" The second approach does not need you to explain *why* you like the ramen place. It only needs your friend to have visited some of the same places you did. The overlap in history is the signal; the friend's *other* visits are the recommendations.
+Think about picking a restaurant in a new city. You could read the menu (content-based), or ask a friend: "You liked that ramen place, what else should I try?" That needs no explanation of *why* you like it, only some overlap in visited places; the friend's *other* visits are the recommendations.
 
 That is **user-based collaborative filtering**, the original form. It was the idea behind early Usenet recommenders in the 1990s, and it is easy to explain to a product manager: "customers like you also bought…".
 
@@ -48,19 +41,13 @@ flowchart TD
 
 *Figure: Three ways to turn the same event log into recommendations. The first two read the whole-history matrix; the third reads session boundaries.*
 
-Before we write any code, two cautions that will come back in the results. First, collaborative filtering only knows about items that someone has interacted with. A brand-new listing has no column in the matrix and will never be recommended by CF alone (we return to this in Chapter 12). Second, popularity leaks in everywhere: popular items have more interactions, so they have more neighbours, more co-visits and higher scores. Much of the engineering in this chapter is about keeping that effect under control.
-
 ## The algorithm
 
 ### The interaction matrix
 
 Everything starts with a matrix $R$ with one row per user and one column per item. Cell $R_{ui}$ holds how strongly user $u$ interacted with item $i$. Our logs are implicit: nobody rated anything with stars. The repo converts event types into strengths using `schema.EVENT_WEIGHT`: a click counts 1, an add-to-cart 3 and an order 5. Summing over all of a user's events on an item gives the cell value. If you clicked an item twice and carted it once, $R_{ui} = 1 + 1 + 3 = 5$.
 
-Three properties of $R$ shape every decision that follows:
-
-1. It is **sparse**. A user touches a few dozen items out of thousands. We will see the actual density when we run the script.
-2. It is **non-negative**. We observe interest but never explicit dislike (the `hide` event is handled elsewhere, as a hard filter). Absence of a click does not mean "dislikes"; it usually means "never saw it".
-3. It is **built at a cutoff**. Only events before the cutoff go in. Evaluation then looks at what users did *after* the cutoff, so the model never sees the answers (Chapter 2).
+Three properties matter: $R$ is **sparse** (a user touches a few dozen items out of thousands); it is **non-negative** (a missing click usually means "never saw it", not "dislikes"); and it is **built at a cutoff**, so evaluation never sees the answers (Chapter 2).
 
 ### User-kNN
 
@@ -105,7 +92,7 @@ $$J(X,Y) = \frac{|X \cap Y|}{|X \cup Y|}$$
 
 where $X$ and $Y$ are the *sets* of users (for item similarity) or items (for user similarity) with any interaction. Take items $A$ and $B$ from the table above. The users who touched $A$ are $\{u_1,u_2\}$ and the users who touched $B$ are $\{u_1,u_2,u_3\}$. The intersection has 2 users and the union has 3, so $J(A,B)=2/3 = 0.667$. For $B$ and $C$: the intersection is $\{u_3\}$, the union is $\{u_1,u_2,u_3\}$, so $J(B,C) = 1/3 = 0.333$.
 
-When does the choice matter? Jaccard is the right tool when your signal is genuinely binary ("bought / did not buy" or "was in the same session / was not") or when a few extremely heavy users would otherwise dominate with huge counts. Cosine is the better default when your weights carry information, as ours do: an order is worth five clicks. Both measures are symmetric, both range from 0 to 1 on non-negative data, and both are blind to *how popular* an item is, which turns out to be both a blessing and a curse.
+Jaccard suits genuinely binary signals ("in the same session or not") and protects against heavy users with huge counts. Cosine is the better default when weights carry information, as ours do: an order is worth five clicks. Both are symmetric and blind to how popular an item is.
 
 ### Item-kNN
 
@@ -123,7 +110,7 @@ Using the same toy matrix, the columns over users $(u_1,u_2,u_3)$ are $A=(1,1,0)
 - $\operatorname{sim}(B,C) = \frac{1}{\sqrt{11}\cdot 1} = 0.302$
 - $\operatorname{sim}(A,C) = 0$, since nobody touched both.
 
-For the target $t=(1,0,2)$ over $(A,B,C)$ the score for $B$ is $0.853\cdot 1 + 0.302\cdot 2 = 1.457$. Same ordering conclusion as before, different arithmetic and, importantly, a different *shape* of computation. In user-kNN you compare the target against every user at request time. In item-kNN the item–item table does not depend on the target at all, so you compute it once, ahead of time, and a request is only a lookup of the neighbours of the handful of items the user touched.
+For the target $t=(1,0,2)$ over $(A,B,C)$ the score for $B$ is $0.853\cdot 1 + 0.302\cdot 2 = 1.457$. The shape of the computation differs: in user-kNN you compare the target against every user at request time, whereas the item–item table does not depend on the target, so it is computed once ahead of time and a request is a lookup of the neighbours of the few items the user touched.
 
 ### Session co-visitation
 
@@ -140,7 +127,7 @@ where $\omega_{s,b}$ is the strength of item $b$ in session $s$.
 
 **Worked example.** Three sessions: $S_1$ has a click on $A$ and a click on $B$; $S_2$ has a click on $A$, an add-to-cart on $B$ and a click on $C$; $S_3$ has a click on $A$ and a click on $C$. Look at the row for $A$. The raw sum for $B$ is $1 + 3 = 4$ (a click in $S_1$, a cart in $S_2$). The raw sum for $C$ is $1 + 1 = 2$. The total is 6, so $w(A\to B) = 4/6 = 0.667$ and $w(A \to C) = 2/6 = 0.333$.
 
-Normalising per *source* has two consequences. It stops very popular source items from producing huge numbers that swamp everything else: whatever $A$'s popularity, its row sums to 1. And it makes the matrix **asymmetric**: $w(A\to B)$ is not $w(B \to A)$. People who look at a phone case often also look at the phone, but people who look at the phone seldom look at that specific case, and a symmetric measure would hide that.
+Normalising per *source* stops popular sources from swamping everything (every row sums to 1) and makes the matrix **asymmetric**: people who view a phone case often view the phone, but not the reverse.
 
 To personalise, take the user's most recent items as *seeds*, each with a recency score from a time-decayed sum (half-life of 7 days, the same decay as Chapter 3). The score of a candidate $b$ is $\sum_{a \in \text{seeds}} \text{recent}(u,a)\cdot w(a\to b)$. If a user's seed $A$ has recency score 0.8, then in the toy example $B$ gets $0.8 \times 0.667 = 0.533$ and $C$ gets $0.8\times0.333=0.267$.
 
@@ -216,7 +203,7 @@ path: book/code/ch05_cf.py
 region: item_knn_score
 ```
 
-`R.T` swaps rows and columns, so `Cn @ Cn.T` is the item–item cosine table `S`. Zeroing the diagonal stops an item from being its own best neighbour. The last line is the scoring formula for every user at once. In production you would never materialise a dense table like this, and we come back to that under scalability; here it is fine because the catalogue is small enough to hold in memory.
+`R.T` swaps rows and columns, so `Cn @ Cn.T` is the item–item cosine table `S`, with the diagonal zeroed so no item is its own neighbour. The scoring line applies the formula to every user at once. Production never materialises a dense table like this (see scalability).
 
 ### The repo's co-visitation matrix
 
@@ -229,7 +216,7 @@ symbol: covisitation_matrix
 
 Walk through it line by line. `hist.interactions()` returns the positive events (click, cart, order) with their weights `w` and their age in days. The next line keeps only events newer than `COVISIT_WINDOW_DAYS` (30). Taking `["w"].max()` per `(session_id, item_id)` collapses repeated actions on the same item within a session into the single strongest one, so a shopper who refreshed the page ten times does not count ten times. The self-merge on `session_id` creates every pair of items in the same session (a *self-join*); the `!=` filter removes the trivial pairs of an item with itself. Summing `w_b` per ordered pair gives the raw co-occurrence mass, and the final `transform("sum")` divides by the total outgoing mass of the source item, which is the normalisation from the algorithm section.
 
-The self-join is the part to remember when thinking about cost: a session with $n$ items produces $n(n-1)$ rows. Short sessions are cheap, but a single bot with 5,000 items in one session would produce about twenty-five million rows. We come back to it in the pitfalls.
+The self-join is the cost driver: a session with $n$ items produces $n(n-1)$ rows, so a bot with 5,000 items in one session would produce about twenty-five million.
 
 Turning the matrix into per-user candidates is the job of `covisit`:
 
@@ -240,14 +227,7 @@ symbol: covisit
 
 `top_seeds` picks each user's ten most relevant recent items (`N_SEEDS`). The merge pairs every seed with its outgoing row of the matrix, the product `cand_recent_score * w` weights each suggestion by how much the seed matters to the user, and the group-by sums contributions when several seeds point to the same candidate. Finally `_top_per_user` keeps the best 40 (`N_COVISIT`). Two seeds pointing at the same candidate reinforce each other, which is the right behaviour: an item co-visited with *both* of the things you looked at is a better bet than one co-visited with only one.
 
-The seeds come from `recent`, which uses the decay helper from Chapter 3. Here is that decay function once more, since everything above depends on it:
-
-```include
-path: recommender/recsys/candidates.py
-symbol: _decay
-```
-
-An event $t$ days old counts $0.5^{t/7}$ of a fresh one, so last week's clicks are worth half of today's.
+The seeds come from `recent`, which weights each event by `_decay`: an event $t$ days old counts $0.5^{t/7}$ of a fresh one (Chapter 3).
 
 ### Where the product page gets its row
 
@@ -262,8 +242,6 @@ The first half builds the co-visitation row for the page's item: rows where `ite
 
 ![The product page of a coffee-and-tea listing with its "Similar items" row underneath. Each card in the row comes from the co-visitation row of the item above, with same-category popular items filling empty slots.](../assets/screenshots/product-similar.png)
 
-Notice that the row shows coffee-and-tea products from several brands. That is exactly the "I am comparing alternatives" behaviour that same-session co-visits capture, and a purely popularity-based fallback would never produce it.
-
 ## Run it
 
 From the `book/` directory:
@@ -272,14 +250,12 @@ From the `book/` directory:
 uv run python code/ch05_cf.py
 ```
 
-First, the setup the script prints about the data:
+The setup:
 
 ```output
 file: results/ch05_cf.txt
 lines: 2-5
 ```
-
-The matrix is tiny in density terms: out of every thousand possible user–item cells, only a handful hold a number. Almost every evaluation user has some history before the cutoff; the few that do not receive the 7-day popularity list so that every user always gets a full list.
 
 Next, the user-kNN sweep over the neighbourhood size $k$, with an example of what a neighbourhood looks like:
 
@@ -288,14 +264,21 @@ file: results/ch05_cf.txt
 lines: 7-13
 ```
 
-And item-kNN, with the nearest items of one concrete item, then the co-visitation summary and how much popularity padding each method needed:
+Item-kNN, with the nearest items of one concrete item:
 
 ```output
 file: results/ch05_cf.txt
-lines: 15-29
+lines: 15-20
 ```
 
-Finally the summary table, evaluated on the top 50 per user, with the metrics from Chapter 2:
+Co-visitation, and how much popularity padding each method needed:
+
+```output
+file: results/ch05_cf.txt
+lines: 22-29
+```
+
+Finally the summary table, evaluated on the top 50 per user:
 
 ```output
 file: results/ch05_cf.txt
@@ -310,15 +293,13 @@ The headline picture: every collaborative method beats the popularity baseline b
 
 ### Reading the table
 
-Start with the baseline. `pop_7d` gets ndcg@20 of 0.0475 and recall@20 of 0.0786. It recommends the same few items to everyone, and its coverage@20 is 0.0087: only about twenty distinct items out of 2,311 recommendable ones. User-kNN lifts ndcg@20 to 0.1662, about three and a half times the baseline, and recall@20 from 0.0786 to 0.2273. Even the weakest of the three collaborative methods, item-kNN at 0.0925, is nearly double popularity on ndcg.
+The baseline `pop_7d` gets ndcg@20 of 0.0475 and recall@20 of 0.0786; its coverage@20 of 0.0087 means only about twenty distinct items out of 2,311. User-kNN lifts ndcg@20 to 0.1662, about three and a half times the baseline. Even the weakest method, item-kNN at 0.0925, nearly doubles it.
 
-**User-kNN is the winner on ndcg here.** With 50 neighbours it reaches 0.1662 ndcg@20 and 0.3456 order_recall@20, the recall computed only on orders, which are the strongest signal. The sweep above shows that $k$ matters: from 10 to 100 neighbours ndcg@20 climbs from 0.1456 to 0.1702, and recall@20 from 0.1740 to 0.2419, with diminishing returns. In the simulator, tastes are driven by category preference, so people with overlapping histories really do share what they will do next. With only 1,408 users in the matrix, scanning every user is cheap, which also means that this experiment does not show the thing that makes user-kNN painful at scale (more on that below).
-
-A caveat on how to read the sweep. The $k=100$ row is better than the $k=50$ row we put in the main table. The main table uses a fixed default of $k=50$; tuning $k$ against the *evaluation* users would be mild leakage; in a real project you would choose it on a separate validation period. The curve is also informative as a shape: it rises quickly and then flattens, which is the typical behaviour.
+**User-kNN wins on ndcg.** With 50 neighbours it reaches 0.1662 ndcg@20 and 0.3456 order_recall@20 (recall on orders only, the strongest signal). The sweep shows diminishing returns: from 10 to 100 neighbours ndcg@20 climbs from 0.1456 to 0.1702. In the simulator tastes follow category preference, so users with overlapping histories do share what they do next. With only 1,408 users, scanning all of them is cheap, so this experiment hides what makes user-kNN painful at scale. (We use a fixed $k=50$; tuning $k$ on the evaluation users would be mild leakage.)
 
 **Item-kNN is weaker on ranking, stronger on breadth.** Its ndcg@20 is 0.0925, but its coverage@20 is 0.8399 against user-kNN's 0.4158: item-kNN spreads its recommendations over a very large part of the catalogue. That is partly good (long-tail exposure, Chapter 1) and partly a symptom of noise, as the example shows:
 
-The most similar items to item 1769, 'Sakura Earphones Original', include 'Volt Instant Noodles Lokal' at cosine 0.538 and 'Sakura Instant Noodles Pro' at 0.497. Earphones and noodles have nothing to do with each other. The cosine looks high because both items have few interactions and a couple of users happened to touch both. The mean non-zero similarity in the table is just 0.0772, while the maximum is 1.000: somewhere in the table there are two items whose columns point in exactly the same direction, almost certainly because the same single user is the only one who ever touched both. Such pairs are statistically meaningless and are the reason production item-kNN systems apply **support thresholds** or **shrinkage**: ignore pairs with fewer than a minimum number of common users, or multiply the similarity by $n_{ij}/(n_{ij}+\lambda)$ where $n_{ij}$ is the number of common users.
+The nearest items to item 1769, 'Sakura Earphones Original', include 'Volt Instant Noodles Lokal' at cosine 0.538. Earphones and noodles are unrelated; both items have few interactions and a couple of users happened to touch both. The mean non-zero similarity is just 0.0772 but the maximum is 1.000, almost certainly two items touched by one and the same user. Production item-kNN therefore applies **support thresholds** or **shrinkage**: ignore pairs with too few common users, or multiply the similarity by $n_{ij}/(n_{ij}+\lambda)$.
 
 **Co-visitation sits in the middle on ndcg and wins on one metric.** It reaches 0.1197 ndcg@20, but its recall@50 is 0.3220, the highest of any method in the table (user-kNN has 0.3163). That is the pattern you want from a *retriever*: it may not order its top 5 as well as the best method, but a wider list catches slightly more of what the user eventually wants. Its recall@5 is 0.0795 against 0.1230 for user-kNN, which is exactly the ordering weakness. In the production pipeline the ordering is the ranker's job; the retriever just needs to bring the right items to the table. Chapter 8 measures this on all four retrievers.
 
@@ -329,9 +310,7 @@ The padding lines tell you how often a method had nothing to say:
 - user-kNN and item-kNN each had 29 evaluation users without any model score (essentially the users with no usable history before the cutoff), plus one partially padded user, and 3.1% of all slots were filled with the 7-day popularity list.
 - Co-visitation had 30 users with no score and 117 who were partially padded, so 8.6% of the slots came from the popularity fallback.
 
-Co-visitation pads more because it requires a user's *recent* items to have been co-visited with something inside the 30-day window. Items with no sessions in common with others produce no neighbours. This is a general feature of co-visitation: it is high-precision but low-coverage per user, and the fallback layer matters. The repo handles it by never using co-visitation alone: the `trending` and `catpop` retrievers cover the gaps, and the ranker sees all four scores.
-
-A useful discipline when you read any CF result: before comparing two methods, check how many users each could actually serve. A method that serves 90% of users with good lists and pads the rest with popular items can look better than it is, or worse, depending on how popular the fallback is.
+Co-visitation pads more because it needs a user's *recent* items to have been co-visited inside the 30-day window: high precision, low per-user coverage. The repo never uses it alone; `trending` and `catpop` cover the gaps and the ranker sees all four scores.
 
 ## Pitfalls and how it is done in production
 
@@ -341,38 +320,26 @@ Count what each approach does at request time. User-kNN must compare the target 
 
 Item-kNN moves the expense offline. The item–item table is computed in a batch job, for example nightly, and stored as a map from each item to its top-$m$ neighbours (typically 50–200). At request time the system looks up the neighbour lists of the few items in the user's history and merges them. The work depends on the number of items the *user* touched, not on the catalogue or the user base. This is the property the Amazon paper highlights, and it is why so much of industry lives with "also viewed" tables.
 
-The offline computation still needs care. The naive item–item product has cost proportional to the number of item pairs. In practice you exploit sparsity: only pairs with at least one common user matter, you cap the history length per user, and you can sample users who touched blockbuster items. In our dense NumPy script the table is 2,120 × 2,120; with ten million items it would be a hundred trillion cells, which is out of the question, and the production table is a sparse top-$m$ list instead.
+The offline computation still needs care: you exploit sparsity (only pairs with a common user matter), cap history per user and sample blockbuster items. In our dense script the table is 2,120 × 2,120; with ten million items it would be a hundred trillion cells, so production stores a sparse top-$m$ list.
 
 Co-visitation has the same shape, and the repo stores only pairs that actually occurred: 13,632 of them, as the output above shows. The cost driver, as mentioned, is the session self-join. In production you would cap items per session (say, the most recent 50) and window the data, which the repo does with `COVISIT_WINDOW_DAYS`.
 
-### Popularity bias and "gray sheep"
+### Popularity bias and gray sheep
 
-Every CF method inherits the popularity skew of the log. Popular items appear in many neighbour lists, so they are recommended often, so they get more clicks, which reinforces the skew. Normalisation (cosine, per-row normalisation in co-visitation) damps it but does not remove it. Chapter 12 covers this feedback loop in depth. The reverse problem is the **gray sheep**: users whose taste does not overlap much with anyone else's. For them, neighbourhood methods produce weak signals, and the popularity padding we measured above takes over.
+Popular items appear in many neighbour lists, get recommended more, and collect more clicks; normalisation damps this but does not remove it (Chapter 12). Users whose taste overlaps with nobody (the *gray sheep*) get weak neighbourhood signals, and popularity padding takes over.
 
-### Cold start
+### Evaluation traps
 
-A new item has no column in $R$ and no session pairs. A new user has an empty row. Collaborative filtering has nothing to offer either of them. This is why the repo's candidate stage combines four retrievers rather than relying on one, why `similar_items` falls back to same-category popularity, and why Chapter 4's content-based approach remains useful for fresh listings.
-
-### Implicit feedback is not preference
-
-A click means "the title or photo caught my eye", not "I like this". Weights (click 1, cart 3, order 5) are an attempt to separate the casual from the committed, but they are a hand-set guess. Two traps to avoid. First, treating *absence* of a click as a negative: in an implicit matrix the zeros are mostly "unseen". Chapter 6 revisits this when we introduce confidence weighting. Second, mixing time scales: an order from a year ago and a click from this morning both land in the same cell unless you decay them, as the repo's `recent` retriever does.
-
-### Evaluation traps specific to CF
-
-- **Self-similarity.** If you forget to remove the user's own row from their neighbour list (the diagonal fix in the script), the model recommends the user's own history. The numbers look excellent and the model is worthless.
-- **Recommending what the user already has.** In a marketplace a user may legitimately re-buy consumables, but for durable goods you should filter out items already ordered. The final pipeline does this in the re-ranking stage (Chapter 11).
-- **Tuning on the test users.** The neighbourhood size $k$, the shrinkage constant and the number of seeds are hyperparameters. Tune them on a validation window before the evaluation window.
+- **Self-similarity.** Forgetting to remove the user's own row from their neighbour list makes the model recommend the user's own history: excellent numbers, worthless model.
+- **Tuning on the test users.** The neighbourhood size $k$, the shrinkage constant and the number of seeds should be tuned on a validation window before the evaluation window.
+- **Cold start.** A new item has no column in $R$ and no session pairs, and a new user has an empty row, so CF has nothing to say (Chapter 12). This is why the repo combines four retrievers.
 
 ### What production systems actually do
 
-Few large systems run pure user-kNN. The typical modern stack uses co-visitation or item-to-item tables, plus learned embeddings (Chapters 6 and 7), as **retrievers**: cheap, high-recall sources of a few hundred candidates per user. A learned ranker then orders the union (Chapters 9 and 10). The collaborative signal does not disappear; it becomes a *feature*. In this repo, `cand_covisit_score` is one of the columns the ranker sees, so the model can learn when to trust co-visitation (for a user with fresh seeds) and when not to.
+Few large systems run pure user-kNN. Co-visitation or item-to-item tables, plus learned embeddings (Chapters 6 and 7), act as cheap high-recall **retrievers**; a learned ranker orders the union (Chapters 9 and 10). Here `cand_covisit_score` is one of the ranker's input columns.
 
 ::: tip
 When you build a co-visitation table for real traffic, keep the raw counts and the normalised weights as separate columns. Normalised weights are what you rank by, but a pair with a weight of 0.5 backed by two sessions is far less trustworthy than one backed by two thousand. A minimum-count threshold, applied before normalisation, is the cheapest quality upgrade you can make.
-:::
-
-::: warning
-Do not compare methods on lists of different length or with different padding. If one method silently falls back to popularity for a third of its users, its metrics are partly the popularity baseline's. Always report how often the fallback fired, as the script does.
 :::
 
 ::: try
@@ -381,10 +348,9 @@ Open `book/code/ch05_cf.py`, find the line `for k in (10, 25, 50, 100):` and cha
 
 ## Summary
 
-- Collaborative filtering recommends from the pattern of behaviour alone: no titles, prices or categories are needed, which lets it connect items a content model would not.
-- Implicit feedback becomes a sparse user × item matrix by weighting events (click 1, cart 3, order 5) and summing per cell; the zeros mean "unseen", not "disliked".
-- User-kNN scores items by the similarity-weighted votes of the $k$ nearest users; item-kNN scores them by similarity to the items the user already touched; both rest on cosine (or Jaccard when only presence matters).
-- On this simulated marketplace all three methods beat 7-day popularity (ndcg@20 0.0475) by a wide margin: user-kNN 0.1662, co-visitation 0.1197, item-kNN 0.0925. Item-kNN gives the broadest coverage (0.8399) but its similarities are noisy where few users overlap.
+- Collaborative filtering recommends from behaviour alone, so it connects items a content model would not; zeros in the implicit matrix mean "unseen", not "disliked".
+- User-kNN uses the similarity-weighted votes of the $k$ nearest users; item-kNN uses similarity to items the user touched; both rest on cosine (or Jaccard for binary signals).
+- All three beat 7-day popularity (ndcg@20 0.0475): user-kNN 0.1662, co-visitation 0.1197, item-kNN 0.0925. Item-kNN has the broadest coverage (0.8399) but noisy similarities where few users overlap.
 - Session co-visitation is item-to-item CF with sessions as the grouping unit; the repo normalises each source item's outgoing weights to sum to 1, which damps popular items and makes the matrix asymmetric.
 - Co-visitation has the best recall@50 of all methods in the table (0.3220), which is what a retriever needs, but leans on popularity padding for users with little recent history (8.6% of slots).
 - Item-to-item designs scale because the expensive table is computed offline and the online step depends only on the size of one user's history.
