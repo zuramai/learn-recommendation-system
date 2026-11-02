@@ -2,7 +2,7 @@
 
 It is 9.9 sale night and the marketplace team is watching a dashboard. Item-to-item co-visitation, the retriever you met in Chapter 5, has been serving the "similar items" strip for months, and it is good at one thing: telling you what people who looked at *this* phone also looked at. But Dewi, the newest engineer on the team, has a different complaint. A user who spent the whole week browsing running shoes, a sports watch and an electrolyte drink opens the home page and sees phone cases. "The system knows nothing about what she *is*," says Dewi. "It only knows which product pages she touched. There is no notion of a taste that connects shoes, watches and electrolyte powder."
 
-What Dewi wants is a *representation*: a short list of numbers for every user and every item, learned so that "fits this user" turns into a single arithmetic operation. If the numbers are good, the sports-minded user lands near sports items even when none of those exact items ever co-occurred with her history. And if the operation is cheap, the team can score millions of items without a heavy ranker. That is the promise of **embeddings** and the **two-tower model**, the architecture that sits behind the first stage of YouTube, Pinterest, Alibaba and, in some form, almost every large marketplace.
+What Dewi wants is a *representation*: a short list of numbers for every user and every item, learned so that "fits this user" turns into a single arithmetic operation. If the numbers are good, the sports-minded user lands near sports items even when none of those exact items ever co-occurred with her history. And if the operation is cheap, the team can score millions of items without a heavy ranker. That is the promise of **embeddings** and the **two-tower model**, the architecture family that large-scale retrieval systems such as YouTube's (see the fact box below) are built on.
 
 In this chapter we build one from scratch in PyTorch on the same simulated marketplace as every other chapter, train it, and evaluate it against the popularity baseline. The result is not what the textbooks make you expect: the model that follows the recipe faithfully scores *below* the trivial "popular in the last 7 days" baseline. Finding out why, and fixing it with a one-line correction from a real production paper, is the most instructive part of the chapter. We finish by building an approximate nearest-neighbour index (IVF) with nothing but numpy, so you see why retrieval over a huge catalogue does not need to touch every item.
 
@@ -28,9 +28,9 @@ Three things.
 3. **Serving is a nearest-neighbour lookup.** Because the final score is a dot product between a user vector and an item vector, and the item vectors do not depend on the user, we can compute every item vector once, put them in an index, and answer "top 50 items for this user" without a neural network forward pass per item.
 
 ::: fact
-**Vectors that do arithmetic.** The paper that popularised word embeddings reported that the vector for "King", minus the vector for "Man", plus the vector for "Woman", lands closest to the vector for "Queen". Nobody programmed that regularity; it fell out of training a simple model to predict neighbouring words on a large corpus. Recommender embeddings are the same idea with items and users in place of words.
+**Vectors that do arithmetic.** The 2013 Google paper on efficient word-vector training recalls an earlier finding: with simple algebra on word vectors, vector("King") − vector("Man") + vector("Woman") gives a vector closest to the vector for "Queen". Nobody programmed that regularity into the vectors. Recommender embeddings follow the same idea with items and users in place of words.
 
-Source: Mikolov et al., ICLR Workshop, 2013
+Source: Mikolov et al., arXiv, 2013
 :::
 
 ## The two-tower architecture
@@ -75,7 +75,7 @@ Both outputs are **L2-normalised**: scaled to length 1. After that, the dot prod
 Why two towers rather than one big network that sees user and item together? A joint network (a *cross* model) can learn arbitrary interactions, such as "this user likes cheap items *only* in Beauty", and is usually more accurate. But it must be run once per (user, item) pair. For 2,311 items that is feasible; for 50 million it is not. The two-tower design is a deliberate trade: give up expressive interactions, gain the ability to precompute and index one side. In a multi-stage system that is exactly the right trade for stage one, because stage two (the ranker of Chapters 9 and 10) re-scores the survivors with all the cross features you like.
 
 ::: fact
-**Two stages at YouTube.** The 2016 YouTube paper describes a recommender split into candidate generation and ranking. Candidate generation treats recommendation as extreme multiclass classification, learns user and video embeddings, and at serving time reduces the problem to a nearest-neighbour search over the video vectors, because scoring millions of videos with a full network per request is too slow. The structure of this book's system follows the same split.
+**Two stages at YouTube.** The 2016 YouTube paper splits its recommender into two networks: candidate generation, which winnows a huge corpus to hundreds of videos, and ranking, which scores them. Candidate generation is posed as extreme multiclass classification over millions of videos using learned user and video embeddings. Because scoring millions of videos within tens of milliseconds needs an approximate scheme that is sublinear in the corpus size, serving reduces to a nearest-neighbour search in the dot-product space. The structure of this book's system follows the same split.
 
 Source: Covington et al., RecSys, 2016
 :::
@@ -131,7 +131,7 @@ and use $s^c$ in the softmax. The intuition: an item that is often drawn as a ne
 A tiny numeric version of the same example. Let item 1 be popular ($q = 0.5$) and items 2 and 3 rarer ($q = 0.25$ each). Then $-\log q = 0.69,\ 1.39,\ 1.39$. The corrected logits are $1.6 + 0.69 = 2.29$, $0.6 + 1.39 = 1.99$, $0.2 + 1.39 = 1.59$. Exponentials: $9.90,\ 7.28,\ 4.88$, sum $\approx 22.1$. The probability of the true item falls from $0.62$ to $0.45$ and the loss rises from $0.48$ to $0.80$. To get the loss down again, the model now has to separate the positive item *more* cleanly in cosine space, not lean on popularity. At serving time the $-\log q$ term is simply dropped.
 
 ::: fact
-**Correcting sampling bias in YouTube retrieval.** Yi et al. studied two-tower retrieval models trained with in-batch softmax on very large, heavily skewed catalogues. They show the sampled loss is biased by the item sampling distribution, correct it by subtracting the log of the estimated item frequency, and estimate that frequency from a data stream so it keeps up as the corpus changes. They report using the method for retrieval at YouTube.
+**Correcting sampling bias in YouTube retrieval.** Yi et al. consider two-tower retrieval models trained with in-batch negatives, the items sampled in a random batch. They argue that this batch loss is subject to sampling bias which can severely restrict performance, particularly under a power-law item distribution. They propose an algorithm that estimates item frequency from streaming data without a fixed item vocabulary, and apply the bias-corrected approach to Neural Deep Retrieval, a YouTube system that retrieves from a corpus of tens of millions of videos.
 
 Source: Yi et al., RecSys, 2019
 :::
@@ -241,10 +241,12 @@ The `probe` line is the cluster choice (`cent @ qi`, only 32 dot products), `can
 Notice that we run the ANN demo on the *spec* model (`two_tower`, without logQ correction) because that is the first model a reader trains and it is the one the brute-force and IVF results describe. The index quality depends on the geometry of the vectors, not on how good the recommendations are.
 
 ::: fact
-**Graph indexes and GPU libraries.** For very large indexes, tree- and cluster-based methods such as IVF are often combined with *graph* methods. HNSW (Hierarchical Navigable Small World graphs) builds a multi-layer proximity graph: a search starts at a sparse top layer and greedily hops towards the query, descending to denser layers, with logarithmic scaling of search cost reported in the original paper. FAISS, Facebook AI's similarity-search library, implements IVF, product quantisation and GPU brute-force and approximate search; its paper describes billion-scale search on GPUs. Google's ScaNN adds anisotropic vector quantisation, which optimises for inner-product error rather than plain reconstruction error.
+**Graph indexes.** Besides cluster-based indexes such as IVF, approximate nearest-neighbour search can use proximity graphs. HNSW (Hierarchical Navigable Small World graphs) incrementally builds a multi-layer structure of proximity graphs over nested subsets of the stored vectors. Starting the search from the upper layer lets the algorithm exploit scale separation between links, and the authors report logarithmic complexity scaling.
 
 Source: Malkov et al., IEEE TPAMI, 2020
 :::
+
+Graph indexes are not the only option. The FAISS library, described by Johnson et al. (2021), provides optimised designs for brute-force, approximate and product-quantisation search on GPUs; their paper reports building a k-NN graph over 1 billion vectors in under 12 hours on four GPUs. Guo et al. (2020) target maximum inner product search with an *anisotropic* quantisation loss, which penalises the error that matters for inner-product ranking rather than plain reconstruction error; Google's ScaNN library is built around this line of work. Our 2,311-item demo needs none of this, but these are the names to search for when the catalogue outgrows a single matrix product.
 
 ## Run it
 
