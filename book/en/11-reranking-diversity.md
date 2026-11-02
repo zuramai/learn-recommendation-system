@@ -4,9 +4,9 @@
 
 Imagine you open the home page of a large marketplace app on a Tuesday evening. Last week you bought a pack of diapers and clicked on three tins of baby formula to compare prices. Your recommender is a good one: a gradient-boosted ranker from the previous chapter, trained on tens of thousands of examples, with a healthy offline NDCG. It looks at your history and concludes, correctly, that you are a new parent. So the first screen is baby formula, baby formula, baby formula, a baby bottle, more baby formula, and one lipstick that slipped in at position five.
 
-Nothing is *wrong* with any single card. Each one is, individually, a defensible bet. But the *page* is a bad page. If the formula brands you like are out of budget this week, the whole screen is wasted. If you wanted to browse, you have nothing to browse. If you bought a refrigerator yesterday, the page might even offer you three more refrigerators. Your ranker scores items one at a time, and it has no idea that twenty similar good bets are not twenty times as good as one.
+Nothing is *wrong* with any single card; each is a defensible bet. But the *page* is a bad page. If you wanted to browse, there is nothing to browse, and if you bought a refrigerator yesterday, the page might offer three more. Your ranker scores items one at a time, and it has no idea that twenty similar good bets are not twenty times as good as one.
 
-This is the job of the last stage of the pipeline: **re-ranking**. It takes the scored list from the ranker and fixes properties that only exist at the level of the *whole list*: variety, fairness between sellers, freshness, things the user must never see again, things the business must show, and a small amount of deliberate randomness so that the system keeps learning. In this chapter we first look at the re-ranker in our repo (a few lines of pandas), then at the classic diversity algorithm, Maximal Marginal Relevance (MMR), measure what diversity costs in offline accuracy on our simulated marketplace, and finish with the two standard exploration strategies: epsilon-greedy and Thompson sampling.
+This is the job of the last stage of the pipeline: **re-ranking**. It takes the scored list and fixes properties that only exist at the level of the *whole list*: variety, fairness between sellers, things the user must never see again, things the business must show, and a little deliberate randomness so the system keeps learning. We look at the repo's re-ranker (a few lines of pandas), then Maximal Marginal Relevance (MMR), measure what diversity costs in offline accuracy, and finish with epsilon-greedy and Thompson sampling.
 
 ![The "Recommended for you" home page in our app: the first row is dominated by baby formula, with makeup mixed in. This is the page a re-ranker is designed to improve.](../assets/screenshots/home-user.png)
 
@@ -24,8 +24,6 @@ This is the job of the last stage of the pipeline: **re-ranking**. It takes the 
 Think about how a shop owner dresses a window. She does not sort her stock by profit margin and then put the top twelve items in a row. If the twelve best sellers are all running shoes, the window says "we sell running shoes", and passers-by who need a coat walk on. She chooses a *set* of items that together say something: a shoe, a coat, a bag, a gift. Each item in the window is slightly worse than the single best item she could have chosen for its slot, but the *window* is better, because the items complement rather than duplicate each other.
 
 A recommender home page is a window. The ranker of Chapter 10 is the owner who sorts by margin. It answers "how likely is this user to engage with this item?" for each item independently, and independence is exactly the problem: after you have shown one baby-formula tin, the probability that a second one is useful is not the same as the probability it had before. Economists call this *diminishing marginal utility*; in information retrieval it is called *redundancy*.
-
-There is a second analogy for the business rules. A supermarket will not display expired yoghurt, however well it sells; it will not let one supplier fill every shelf; and it may display a promoted brand at eye level, but it must tell you when a shelf is paid for. Such rules are not about prediction at all. They are *constraints* on the output, and the cleanest place to apply them is after the model has done its prediction job, in a small, readable, testable piece of code. That is why the repo puts them in a separate file, `recommender/recsys/rerank.py`, rather than baking them into the model.
 
 There are three families of re-ranking logic and we will meet all of them:
 
@@ -49,17 +47,13 @@ flowchart LR
 
 ## The algorithm
 
-### Why we re-rank *after* the model
-
-One could try to teach the ranker about variety directly. That is an active research area (listwise and "slate" models), but in a production pipeline the separation is attractive for three engineering reasons. First, the rules change weekly (a marketing campaign starts, a legal team forbids a category in a country) while the model retrains every few hours or days; mixing them would force retraining for every policy change. Second, rules must be *auditable*: when a seller complains about not being shown, "the cap is four items per shop" is an answer, whereas "the gradient boosting learned it" is not. Third, the re-ranker works on a few dozen items and can afford $O(n^2)$ computation that would be unaffordable over millions.
-
 ### Filters: the already-bought rule
 
 The simplest rule is the *already-bought filter*. We drop an item if the user ordered it before and the category is not consumable. Someone who bought a refrigerator last month does not need to see that exact refrigerator; someone who bought coffee last month very probably does. In the simulator (and in the schema from Chapter 1) each category has an `is_consumable` flag, which the feature table exposes as `item_is_consumable`, and the history feature `ui_orders` counts how many times this user ordered this item. The rule is
 
 $$\text{drop}(u, i) \iff \text{ui\_orders}(u,i) > 0 \ \wedge\ \text{item\_is\_consumable}(i) = 0 .$$
 
-Hidden items (the user pressed "Not interested") are handled earlier, in candidate generation, as a hard filter; you can see it in `candidates.generate`. Out-of-stock items are also removed there. Filtering at candidate time is cheaper because we do not waste feature computation on rows that will never be shown.
+Hidden items (the user pressed "Not interested") and out-of-stock items are removed earlier, in `candidates.generate`, which is cheaper because we do not compute features for rows that will never be shown.
 
 ### Caps: a poor man's diversity
 
@@ -106,15 +100,15 @@ The final order is A, C, D, B. The Phones twin B fell from second place to last.
 
 ### Exploration: giving uncertain items a chance
 
-Everything so far assumes that the ranker's scores are right. But the ranker only knows what it has seen. An item that was never shown has no clicks, so the model scores it low, so it is never shown: a *feedback loop* we study in Chapter 12. The textbook remedy is the **multi-armed bandit** framework: each item is an "arm" with an unknown click probability, and every impression is a pull that both earns reward (a click) and teaches us about the arm.
+Everything so far assumes the ranker's scores are right, but the ranker only knows what it has seen. An item never shown has no clicks, so the model scores it low, so it is never shown: a *feedback loop* we study in Chapter 12. The textbook remedy is the **multi-armed bandit** framework: each item is an "arm" with an unknown click probability, and every impression both earns reward and teaches us about the arm.
 
-**Epsilon-greedy** is the simplest policy. With probability $1-\varepsilon$ show the item the model ranks best; with probability $\varepsilon$ show an item chosen at random from a pool. With $\varepsilon = 0.1$ on a 20-slot page, on average two slots are exploratory. It is trivial to implement, easy to explain to a product manager, and wasteful: the random slot is equally likely to pick an item with 50 impressions and a dismal click rate as one with 2 impressions and unknown potential.
+**Epsilon-greedy** is the simplest policy: with probability $1-\varepsilon$ show the model's best item, otherwise a random one from a pool. With $\varepsilon = 0.1$ on a 20-slot page, two slots are exploratory on average. It is trivial to implement and wasteful: the random slot is as likely to pick an item with 50 impressions and a dismal click rate as one with 2 impressions and unknown potential.
 
 **Thompson sampling** is smarter about *where* to explore. For each item, maintain a probability distribution over its click rate $\theta$. With a Beta prior and click/no-click feedback, this is conjugate: after $c$ clicks and $n-c$ non-clicks, starting from a uniform $\text{Beta}(1,1)$ prior,
 
 $$\theta \mid \text{data} \sim \text{Beta}(1 + c,\ 1 + n - c), \qquad \mathbb{E}[\theta] = \frac{1+c}{2+n}, \qquad \text{Var}[\theta] = \frac{ab}{(a+b)^2(a+b+1)} .$$
 
-To choose what to show, *draw one random sample from each item's Beta distribution and rank by the draws*. An item with lots of evidence has a narrow distribution and its draws hover around its true rate. An item with little evidence has a wide distribution and sometimes draws a high number, which pushes it to the top and earns it an impression. As evidence accumulates the distribution narrows and exploration dies out by itself, with no tunable $\varepsilon$ and no schedule.
+To choose what to show, *draw one random sample from each item's Beta distribution and rank by the draws*. An item with lots of evidence has a narrow distribution; an item with little evidence has a wide one and sometimes draws a high number, which earns it an impression. As evidence accumulates exploration dies out by itself, with no tunable $\varepsilon$.
 
 #### A worked Thompson example
 
@@ -128,7 +122,7 @@ Three items, uniform prior:
 
 The means are $4/12$, $1/4$ and $1/2$. The variances follow from the formula: for A, $ab/((a+b)^2(a+b+1)) = 32/(144 \times 13) \approx 0.0171$, so the standard deviation is about $0.131$; for B it is $3/(16 \times 5) = 0.0375$ (std $0.194$); for C it is $1/(4 \times 3) = 0.0833$ (std $0.289$).
 
-Now suppose one round of sampling yields the (illustrative) draws A = 0.31, B = 0.18, C = 0.77. The order is C, A, B: the unknown newcomer is shown first, even though B and A both have lower uncertainty. Next round the draws might be A = 0.38, B = 0.22, C = 0.12, and the established item wins. If C then gets 1 click in 1 impression, it becomes Beta(2, 1) with mean $0.667$; if it gets zero clicks in 5 impressions it becomes Beta(1, 6), mean $0.143$, and rarely wins another draw. The system explores precisely as much as it is uncertain.
+Suppose one round of sampling yields the (illustrative) draws A = 0.31, B = 0.18, C = 0.77. The order is C, A, B: the unknown newcomer is shown first. If C then gets 1 click in 1 impression it becomes Beta(2, 1) with mean $0.667$; if it gets zero clicks in 5 impressions it becomes Beta(1, 6), mean $0.143$, and rarely wins another draw. The system explores exactly as much as it is uncertain.
 
 ::: fact
 **Maximal Marginal Relevance is a 1998 idea that outlived its original task.** MMR was introduced by Carbonell and Goldstein at SIGIR 1998 for reordering retrieved documents and for producing summaries, combining a query-relevance term with a novelty term that penalises similarity to documents already selected. The same greedy formula is still the default starting point for diversifying recommendation slates.
@@ -159,11 +153,9 @@ path: recommender/recsys/rerank.py
 symbol: rerank
 ```
 
-Read it line by line. The input `scored` has one row per `(user_id, item_id)` candidate, with the ranker's `score` plus a few columns the rules need. The first statement builds a boolean mask `bought_durable` for the filter rule from above. The second statement drops those rows and sorts by user and descending score; after that line, every user's rows are in best-first order, which the next lines depend on.
+Read it line by line. `scored` has one row per `(user_id, item_id)` candidate with the ranker's `score` plus the columns the rules need. The first statement builds the boolean mask `bought_durable`; the second drops those rows and sorts by user and descending score, which the following lines depend on.
 
 Then comes the trick. `groupby(["user_id", "category_id"]).cumcount()` numbers the rows inside each group in their current order, starting from zero. Because the frame is already sorted by score, the number is exactly "how many higher-scored items of this category does this user already have". The same is done per shop. A row survives when both counters are under their limits (`MAX_PER_CATEGORY = 8`, `MAX_PER_SHOP = 4`, defined at the top of the module). Finally `groupby("user_id").head(k)` truncates each user's list to $k$ items. The function is fully vectorised, which matters: during training evaluation it runs for thousands of users at once, and in the live `Recommend` RPC it runs on one user's frame.
-
-One consequence to keep in mind: the caps remove items, they do not *replace* them. If a user's candidate pool is dominated by one category, the output list can be shorter than $k$. We will see a trace of this in the results.
 
 ### The MMR companion script
 
@@ -174,7 +166,7 @@ path: book/code/ch11_rerank.py
 symbol: similarity
 ```
 
-It receives two NumPy arrays, one with each candidate's category and one with each candidate's parent category, and broadcasts them into an $n \times n$ matrix with `cat[:, None] == cat[None, :]`. `np.where` is nested: same category gives 1, otherwise same parent gives 0.5, otherwise 0. Giving partial credit to the parent category matters because "Dog Toys" and "Cat Food" are not the same category but are both Pets, and a page full of Pets items is still repetitive.
+It broadcasts the category and parent-category arrays into an $n \times n$ matrix with `cat[:, None] == cat[None, :]`; nested `np.where` gives 1 for the same category, 0.5 for the same parent, else 0. Partial credit for the parent matters because "Dog Toys" and "Cat Food" are different categories but both Pets, and a page full of Pets items is still repetitive.
 
 Now the greedy loop itself.
 
@@ -183,18 +175,11 @@ path: book/code/ch11_rerank.py
 symbol: mmr
 ```
 
-Work through it in order. For each user `g` we normalise the scores to $[0,1]$ (the `max(..., 1e-9)` guards against a user whose candidates all have the same score). `max_sim` holds, for every candidate, the largest similarity to anything chosen so far; it starts at zeros, which implements "empty set, no penalty". `avail` marks candidates not yet taken. Inside the loop, `mmr_score` is exactly the formula $\lambda \cdot \text{rel} - (1-\lambda) \cdot \text{max\_sim}$, with unavailable items set to $-\infty$ so `argmax` never picks them twice. After choosing item `j`, we update the running maximum with `np.maximum(max_sim, sim[j])`, one row of the similarity matrix, rather than recomputing the maximum over the whole selected set. That update is what makes the algorithm cheap.
+Work through it in order. Scores are normalised to $[0,1]$ per user (`1e-9` guards against all-equal scores). `max_sim` holds, for every candidate, the largest similarity to anything chosen so far; zeros mean "empty set, no penalty". Inside the loop, `mmr_score` is exactly $\lambda \cdot \text{rel} - (1-\lambda) \cdot \text{max\_sim}$, with taken items set to $-\infty$. After choosing `j`, one row of the similarity matrix updates the running maximum with `np.maximum(max_sim, sim[j])`, which is what keeps the algorithm cheap.
 
-The loop returns only `user_id`, `item_id` and `category_id` in the chosen order, which is the format `common.evaluate` expects (best first, top 50 per user). The last helper measures list variety.
+The loop returns only `user_id`, `item_id` and `category_id` in chosen order, the format `common.evaluate` expects. A helper, `diversity`, counts distinct categories in each user's top 20 and averages over users; this is the *intra-list diversity* plotted below.
 
-```include
-path: book/code/ch11_rerank.py
-symbol: diversity
-```
-
-`diversity` takes each user's top 20, maps items to categories and counts distinct categories, then averages over users. This is a deliberately simple *intra-list diversity* measure. Coverage, from Chapter 2, is the other lens: it measures how many distinct items of the whole catalogue are ever recommended to anyone, which is a property of the system rather than of one page.
-
-The `main` function loops over $\lambda \in \{1.0, 0.9, 0.7, 0.5, 0.3\}$, evaluates each result with the same evaluation helper used since Chapter 3, then evaluates two more variants: the repo's `rerank.rerank`, and the already-bought filter on its own (the first of the two rules, without any caps). Seeing the two rules separately tells us which one costs what.
+The `main` function loops over $\lambda \in \{1.0, 0.9, 0.7, 0.5, 0.3\}$, then evaluates two more variants: the repo's `rerank.rerank`, and the already-bought filter alone, so we can see which rule costs what.
 
 ## Run it
 
@@ -230,84 +215,50 @@ The chart plots the same table. Moving down the MMR line from the top left is mo
 - **$\lambda = 0.7$**: ndcg drops $0.0232$ to 0.1884, while the page now spans 11.03 categories: 5.71 more than the baseline. A little over two additional categories for every $0.01$ of ndcg lost, and the curve begins to steepen.
 - **$\lambda = 0.5$ and $0.3$**: ndcg is 0.1603 and 0.1401, and the distinct-category count reaches 16.28 and 18.69. A 20-card page with 18.69 categories is almost entirely unique categories. We have given up roughly a quarter and a third of the ranker's ndcg to get it.
 
-The behaviour at the deep end is instructive. Look at `recall@5` in the table: it goes from 0.1503 at $\lambda = 1.0$ to 0.0927 at $\lambda = 0.3$. The penalty hurts the *top* of the list the most, because MMR deliberately pushes down strong relevant items that happen to be similar to ones already placed. But `recall@50` barely moves, from 0.3824 to 0.3580. The same items are still in the list; they are merely moved down the page. That is a useful reminder: re-ranking changes *order* and *selection from a fixed pool*, it never invents new good candidates. Recall at deep cut-offs is mostly a statement about the candidate generator and ranker.
+The deep end is instructive. `recall@5` goes from 0.1503 at $\lambda = 1.0$ to 0.0927 at $\lambda = 0.3$, because MMR pushes down strong items similar to ones already placed, so the *top* of the list suffers most. But `recall@50` barely moves, from 0.3824 to 0.3580: the same items are still in the list, merely lower. Re-ranking changes order and selection from a fixed pool; it never invents new good candidates.
 
-Coverage tells a related story. Coverage@20 drops from 0.4245 to 0.3129 as $\lambda$ falls. One might expect diversity to increase catalogue coverage, but MMR diversifies *within* a user's list over *categories*, not across users over *items*. To pick a variety of categories, it has to dip into each category's best items, and the best items in each category are the same popular items for everyone. So the page is more varied, yet the whole system shows a narrower slice of the catalogue. Per-list diversity and system-level coverage are different goals and need different tools (for instance exposure caps per item, or boosts for under-exposed items).
+Coverage tells a related story: coverage@20 drops from 0.4245 to 0.3129 as $\lambda$ falls. MMR diversifies *categories within one user's list*, and to do so it dips into each category's best items, which are the same popular items for everyone. The page is more varied, yet the system shows a narrower slice of the catalogue. Per-list diversity and system-level coverage are different goals needing different tools, such as per-item exposure caps.
 
 ### The repo's own rules
 
-Now the two red squares in the chart. `already-bought filter only` scores ndcg@20 of 0.2109 against 0.2116: a loss of 0.0007, far smaller than any of the MMR steps, with 5.36 categories on average. The filter is nearly free offline. Offline labels rarely reward re-showing a durable item the user already owns, so removing it costs almost nothing.
+Now the two red squares in the chart. `already-bought filter only` scores ndcg@20 of 0.2109 against 0.2116, a loss of 0.0007, far smaller than any MMR step, with 5.36 categories on average: nearly free offline. `rerank.rerank caps` (filter plus 8 per category and 4 per shop) yields 0.2044 and 6.58 distinct categories. MMR at $\lambda = 0.9$ does slightly better (0.2081 with 6.78 categories), because it demotes items according to their similarity to the rest of the page, while the caps only react once a count passes a threshold.
 
-`rerank.rerank caps` (filter plus the caps of 8 per category and 4 per shop) yields ndcg@20 of 0.2044 and 6.58 distinct categories. Compare with MMR: at $\lambda = 0.9$ the loss is smaller (0.2081) and the distinct categories similar (6.78). In this experiment, MMR gives slightly better accuracy for the same amount of variety, because it chooses *which* items to demote based on their similarity to the others, while the caps only react once a count exceeds a threshold.
+There is a sharper difference in `recall@50`: 0.2956 for the caps against 0.3789 for the filter alone. `rerank` removes items without replacing them, so when a user's candidate pool is concentrated in a few categories the surviving list can be shorter than 50 (our likely explanation; we did not instrument it). Strict caps therefore need enough variety from the candidate generator upstream.
 
-There is a sharper difference in `recall@50`, which is 0.2956 for the caps and 0.3789 for the filter alone. The caps reduce the deep recall by about eight points. Remember that `rerank` removes items and does not replace them: if a user's candidate pool comes from a few categories, the surviving rows can be fewer than 50 (our likely explanation for the drop, which we did not instrument), and recall at 50 simply cannot reach what it did before. This is an *interaction between stages*: if you apply strict caps, the candidate generator must supply enough variety upstream. Applying caps to a pool that is already narrow just shortens the page.
-
-A word of caution about what these experiments can and cannot show. The offline labels (click, cart or order within seven days) are generated by users who saw whatever the *old* system showed. They cannot reward variety that the user never had the chance to consume, and boredom, the long-term effect of a monotone page, does not show up in a seven-day window. Ziegler and colleagues needed an online study to demonstrate the benefit, and you will too. Treat the offline curve as the *price list*, and the online A/B test (Chapter 14) as the place to decide how much to pay.
+A caution: the offline labels come from users who saw whatever the *old* system showed. They cannot reward variety the user never saw, and the long-term boredom of a monotone page does not show up in a seven-day window. Ziegler and colleagues needed an online study to demonstrate the benefit, and you will too. Treat the offline curve as the *price list* and the A/B test (Chapter 14) as the place to decide how much to pay.
 
 ## Beyond diversity: business rules in the re-ranker
 
 ### Fairness to sellers
 
-A marketplace is a two-sided platform. Buyers want relevant items; sellers want to be seen. A ranker trained on engagement learns that established shops with many reviews get clicks, so they get more impressions, so they get more reviews: the rich-get-richer loop. A new seller with a good product may never accumulate the data to be ranked well. The per-shop cap in our repo is a crude fairness rule: no seller can occupy more than four slots on a page.
-
-More principled approaches define fairness in terms of *exposure*. The position-bias analysis of Chapter 12 tells us that attention decays steeply with rank, so being placed in slot 15 is not remotely equivalent to slot 1. Singh and Joachims formalised constraints in terms of the exposure allocated to items or groups relative to their merit, and gave algorithms that maximise user utility subject to those constraints. In practice a marketplace implements simple versions: a guaranteed minimum number of slots for new sellers, or an exposure budget per shop per day that the re-ranker consults.
+A marketplace is two-sided: buyers want relevance, sellers want to be seen. A ranker trained on engagement gives established shops more impressions, hence more reviews: a rich-get-richer loop that can starve a good new seller. The per-shop cap is a crude fairness rule. More principled approaches work with *exposure*: since attention decays steeply with rank (Chapter 12), slot 15 is not slot 1. Singh and Joachims formalised constraints on the exposure items or groups receive relative to their merit and gave algorithms that maximise user utility subject to them. In practice marketplaces implement simple versions, such as minimum slots for new sellers or a per-shop daily exposure budget.
 
 ### Ads, boosts and sponsored slots
 
-Almost every real marketplace sells advertising placement. The key design rule is **do not contaminate the ranker with ad money.** The ranker's job is to estimate relevance. Ads are inserted *after* it, into fixed positions (say slots 3, 8 and 13), selected by a separate auction that considers the advertiser's bid *and* a predicted click rate, and they are clearly labelled "Sponsored". Similarly, a campaign-driven boost ("all items in the 9.9 sale get $+0.05$ to their score") should be a visible multiplier or additive term in the re-ranker, with a start and end date, not a hidden change in the training labels. If you boost inside the model, the next retraining will treat boosted impressions as organic evidence and bake the campaign into the model forever.
-
-### Position slots, freshness and "do not show" lists
-
-Other typical rules: reserve a slot for a brand-new item, so that cold-start items get measurable impressions (Chapter 12); suppress items with recent bad-quality signals (high return rate, a cancel rate above a threshold, which we saw in the shop features); never show an item from a seller under suspension; remove restricted goods by country. Each of these is a few lines in the style of `rerank.rerank`, and each should have a unit test with a hand-made frame.
+Almost every marketplace sells advertising placement. The design rule is **do not contaminate the ranker with ad money.** Ads are inserted *after* the ranker, into fixed positions (say slots 3, 8 and 13), chosen by a separate auction that weighs the bid and a predicted click rate, and labelled "Sponsored". A campaign boost ("all 9.9 sale items get $+0.05$") should likewise be a visible term in the re-ranker with a start and end date, not a change to the training data; otherwise the next retraining treats boosted impressions as organic evidence and bakes the campaign into the model.
 
 ### Exploration in the re-ranker
 
-The exploration policies above also live here. The cleanest way to add epsilon-greedy is to run the whole pipeline as usual, then, for a fraction $\varepsilon$ of *slots* (not of users), swap the item in the slot for a random choice from a pool of under-exposed candidates, in the lower half of the page where the cost of a miss is smallest. Thompson sampling needs click and impression counts per item (or per item and context) in a feature store; at serving time you draw one Beta sample per candidate and either replace the ranker's predicted click rate with the draw or blend the two. In pseudo-code:
-
-The following sketch is illustrative pseudo-code, not code from the repo (the repo does not implement exploration):
-
-```python
-def thompson_rerank(candidates, stats, alpha0=1.0, beta0=1.0, rng=None):
-    # stats[item] = (clicks, impressions); unseen items get (0, 0)
-    for c in candidates:
-        clicks, shown = stats.get(c.item_id, (0, 0))
-        draw = rng.beta(alpha0 + clicks, beta0 + shown - clicks)
-        c.explore_score = 0.5 * c.model_score + 0.5 * draw
-    return sorted(candidates, key=lambda c: -c.explore_score)
-```
-
-Two details matter. First, exploration only works if you **log the policy** (which slot was exploratory and with what probability), otherwise the data collected is as biased as before and you cannot correct it, a point we return to with inverse propensity weighting in Chapter 12. Second, keep exploration away from the first screen of high-value traffic until you have measured its cost.
+In practice, run the pipeline as usual, then swap the item in a fraction $\varepsilon$ of *slots* (not users) for an under-exposed candidate, preferably in the lower half of the page; for Thompson sampling, keep click and impression counts per item in a feature store and blend one Beta draw per candidate into the score. Either way, **log which slots were exploratory and with what probability**; otherwise the data stays as biased as before and cannot be corrected (inverse propensity weighting, Chapter 12).
 
 ## Pitfalls and production practice
 
-**Normalise relevance before MMR.** The MMR formula mixes a score with a similarity in $[0,1]$. LightGBM scores are unbounded log-odds-like numbers, and different users have different ranges. If you do not rescale, $\lambda$ means a different thing for every user. The script uses per-user min-max scaling; production systems often use the calibrated probability instead.
+**Normalise relevance before MMR.** The formula mixes a score with a similarity in $[0,1]$, but LightGBM scores are unbounded and differ per user. Without rescaling (we use per-user min-max), $\lambda$ means something different for every user.
 
-**Choose the similarity that matches the goal.** Our similarity is category-based and cheap. It can't tell two different phone cases from two identical ones; for that you would use item embeddings (Chapter 7) and cosine similarity. Embedding similarity is smoother, but harder to explain, and it can reduce visible category variety while still reducing redundancy.
+**Do not tune $\lambda$ offline only.** The curve above is the price list, not a prescription. Start mild (our 0.9 gives most of the first gains), A/B test on session-level metrics (orders per user, return rate), and move the dial from there.
 
-**Do not tune $\lambda$ offline only.** The curve above is the price list, not a prescription. Typical practice is to start from a mild value (our 0.9 gives most of the first gains), run an A/B test measuring session-level metrics (orders per user over days, return rate, add-to-cart diversity), and move the dial from there.
+**Order of operations matters.** Filters first, diversity next, ad insertion last; carve out exploration slots *before* caps, or a cap can silently remove the explored item.
 
-**Rules need monitoring.** Each filter should emit a counter of how many items it removed. If `rerank` suddenly drops 40% of candidates, either a category went out of stock, or a bug in `item_is_consumable` flipped a flag. Silent filters are the commonest source of quiet recommendation regressions.
-
-**Order of operations matters.** Filters first (so that you do not diversify around items you will delete), diversity next, ad insertion last. Exploration slots must be carved out *before* caps are applied, or the cap can remove the explored item and its impressions silently vanish.
-
-**Short lists after caps.** As we saw, caps can leave fewer than $K$ items. Decide a policy: backfill from the next-best candidates ignoring caps, relax the caps, or accept a short page and let the surface fill the remainder with trending items. The repo accepts the short page, which is fine for a teaching system but should be a conscious choice in production.
-
-**Re-ranking is not a cure for a bad candidate pool.** If everything in the pool is baby formula, MMR will pick the least-similar baby formula. Diversity has to be enforced upstream too, for example by having separate retrievers per interest cluster.
-
-### How the home page behaves in this repo
-
-The live `Recommend` RPC calls `rerank.rerank` as its last step; the "Why this?" panel of Chapter 13 therefore explains the model score, not the re-ranking. The page in the screenshot at the start of this chapter is *after* the filter and the caps, which is a strong reminder that caps of eight per category are loose: on a 20-card page they still allow a single category to fill 40% of the screen. If you wanted the behaviour of MMR with $\lambda = 0.9$, the change is a localised replacement of one function, thanks to the separation of stages.
+**Caps can shorten the page, and re-ranking cannot fix a bad pool.** Decide whether to backfill, relax the caps or accept a short page (the repo accepts it). If everything in the pool is baby formula, MMR just picks the least-similar baby formula, so enforce diversity upstream too, for example with separate retrievers per interest cluster.
 
 ## Summary
 
-- Rankers score items independently, so the best-scored list can be repetitive; re-ranking optimises properties of the whole list.
-- Filters remove items that must never be shown (already-bought durables, hidden, out of stock) and cost almost nothing offline: 0.2109 versus 0.2116 ndcg@20 for the bought-durable filter alone.
-- Caps per category and per shop give hard guarantees but are blind to similarity; in our run they cost more accuracy than mild MMR for similar variety.
-- MMR picks greedily by $\lambda \cdot \text{rel} - (1-\lambda) \cdot \max \text{sim}$; $\lambda = 0.9$ added about 1.45 categories for $-0.0035$ ndcg, while lower values lose accuracy quickly.
-- Diversity is a product trade-off: offline metrics cannot reward variety the user never saw, so tune $\lambda$ by A/B test.
-- Keep fairness rules, ad slots and campaign boosts in the re-ranker, outside the model, so they can be audited and switched off.
-- Epsilon-greedy explores at a fixed rate; Thompson sampling explores in proportion to uncertainty by sampling from each item's Beta posterior.
-- Log which slots were exploratory; without propensities, exploration data cannot be used safely.
+- Rankers score items independently, so the best-scored list can be repetitive; re-ranking optimises the whole list.
+- Filters (already-bought durables, hidden, out of stock) cost almost nothing offline: 0.2109 versus 0.2116 ndcg@20.
+- Caps give hard guarantees but are blind to similarity; here they cost more accuracy than mild MMR for similar variety.
+- MMR picks greedily by $\lambda \cdot \text{rel} - (1-\lambda) \cdot \max \text{sim}$; $\lambda = 0.9$ added about 1.45 categories for $-0.0035$ ndcg, while lower values lose accuracy quickly. Tune $\lambda$ by A/B test.
+- Keep fairness rules, ad slots and boosts in the re-ranker, outside the model, so they can be audited and switched off.
+- Epsilon-greedy explores at a fixed rate; Thompson sampling explores in proportion to uncertainty. Log which slots were exploratory.
 
 ## Quiz
 
