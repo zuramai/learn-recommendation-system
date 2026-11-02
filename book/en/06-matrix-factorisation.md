@@ -2,13 +2,9 @@
 
 ## The shopper nobody resembles
 
-Rina has been on the marketplace for three weeks. She has clicked a ceramic pour-over coffee set, a hand grinder, a pack of unbleached paper filters, and, on a slow Tuesday, a pair of wired earphones. Then she opens the home page and the user-based recommender from the previous chapter goes looking for her "neighbours": other shoppers whose click history overlaps with hers. It finds two. One of them clicked the earphones and nothing else. The other clicked the grinder and a gaming mouse. The recommendations that come back are thin, and they are thin for a structural reason: the whole method hinges on two people having touched the *same* items, and in a catalogue of two thousand products almost nobody has.
+Rina has clicked a ceramic pour-over set, a hand grinder and paper filters, plus, on a slow Tuesday, wired earphones. The user-based recommender from the previous chapter looks for neighbours who clicked the *same* items, and in a catalogue of two thousand products almost nobody did. This is the sparsity problem of Chapter 1: neighbourhood methods compare raw rows of an almost empty matrix, so two shoppers with the same taste but no shared SKU have cosine zero.
 
-This is the sparsity problem we met in Chapter 1, and neighbourhood methods are the most exposed to it. They compare two raw rows of a matrix that is almost entirely empty. Two shoppers can love the same kind of thing (slow coffee, small gadgets, minimalist stationery) without ever having clicked the same SKU, and the cosine between their rows will be zero.
-
-Matrix factorisation attacks the problem from a different angle. Instead of comparing rows of raw clicks, it asks: *what small set of hidden tastes could explain all these clicks at once?* Each shopper becomes a short vector of taste strengths, each product becomes a short vector of "how much of each taste do I contain", and the score for a pair is just their dot product. Two shoppers with no products in common can still end up with nearly the same taste vector, because the products they did click were built from the same ingredients.
-
-This chapter is the first with real linear algebra, and it is also the first method in the book that we train by optimisation instead of counting. We will build it in plain numpy so that nothing is hidden behind a library call.
+Matrix factorisation asks instead: *what small set of hidden tastes could explain all these clicks at once?* Each shopper becomes a short vector of taste strengths, each product a short vector of "how much of each taste I contain", and a pair's score is their dot product. We build it in plain numpy so nothing hides behind a library call.
 
 **What you'll learn**
 
@@ -20,7 +16,7 @@ This chapter is the first with real linear algebra, and it is also the first met
 
 ## Intuition: the taste dimensions nobody wrote down
 
-Imagine you run a small coffee shop and you want to describe your regulars to a new barista. You would not hand over a spreadsheet with one column per menu item and a tick for every purchase. You would say things like "Dewi is a strong-and-black person, Bayu likes sweet and milky, Sari will try anything seasonal". Three or four phrases summarise a few hundred purchases, and they *predict* behaviour: when the new seasonal drink arrives, you know who to offer it to.
+Imagine describing your regulars to a new barista. You would not hand over a spreadsheet with a tick per menu item; you would say "Dewi likes strong and black, Bayu likes sweet and milky". A few phrases summarise hundreds of purchases and *predict* behaviour.
 
 Matrix factorisation automates exactly that summarising step. Those phrases ("strong-and-black", "sweet and milky") are the **latent factors**: dimensions of taste that nobody labelled in advance, discovered because they make the purchase data easier to explain. The word *latent* just means hidden. The algorithm does not know what a factor means; it only knows that giving every user a value on factor 1 and every item a value on factor 1 lets it reconstruct the click matrix better.
 
@@ -37,16 +33,7 @@ A toy example makes the mechanics concrete. Suppose there are only two factors, 
 | Gadget lover | 1.2 | 0.2 |
 | Foodie | 0.1 | 1.1 |
 
-The score for a user and an item is the dot product of their two vectors, multiply matching entries and add. For the gadget lover and the earphones that is $1.2 \times 1.0 + 0.2 \times 0.0 = 1.20$. For the gadget lover and the noodles it is $1.2 \times 0.0 + 0.2 \times 1.0 = 0.20$. The full set of scores, which is the little worked example we will reuse to see *what the model recommends*, comes out like this:
-
-| | earphones | power bank | noodles | coffee grinder |
-|---|---|---|---|---|
-| Gadget lover | 1.20 | 1.10 | 0.20 | 0.64 |
-| Foodie | 0.12 | 0.20 | 1.10 | 0.92 |
-
-Read the rows as ranked lists. The gadget lover gets earphones, then power bank, then the grinder, then noodles. The foodie gets noodles, then the grinder, then the power bank. The coffee grinder lands in the middle for both people, because it is a *bridge*: it has a bit of both tastes. A neighbourhood method has no natural way to express "this item is part gadget, part kitchen". A factor model gets it for free from two numbers.
-
-Here is the part that matters for sparsity. Notice that the foodie never needs to have clicked the *same* noodles as someone else. If the foodie's vector is learned from clicks on dry-roast peanuts, cooking oil and a rice cooker, it will land near $(0.1, 1.1)$, and every other item with a large factor B will score high. The unit of transfer is the factor, not the individual product.
+The score is the dot product: for the gadget lover and the earphones, $1.2 \times 1.0 + 0.2 \times 0.0 = 1.20$; for the foodie and the noodles, $0.1 \times 0.0 + 1.1 \times 1.0 = 1.10$. Ranked, the gadget lover gets earphones (1.20), power bank (1.10), coffee grinder (0.64), noodles (0.20); the foodie gets noodles, grinder, power bank. The grinder is a *bridge* with a bit of both tastes, which a neighbourhood method cannot express. The foodie also never needs to click the *same* noodles as anyone else: clicks on peanuts, cooking oil and a rice cooker land the vector near $(0.1, 1.1)$, so every item with a large factor B scores high. The unit of transfer is the factor, not the product.
 
 The second idea is **low rank**. A click matrix with $m$ users and $n$ items has $m \times n$ cells. A factorisation with $f$ factors replaces it with two matrices that hold only $(m + n) \times f$ numbers. In this chapter's data that is the difference between roughly three million cells ($1408 \times 2120 = 2{,}984{,}960$) and $(1408 + 2120) \times 32 = 112{,}896$ parameters. Squeezing that much information through a narrow bottleneck *forces* the model to find the regularities in the data, which is why compression and generalisation are, here, the same thing.
 
@@ -76,15 +63,7 @@ $$x_u \leftarrow x_u + \gamma \left( e_{ui}\, y_i - \lambda x_u \right), \qquad 
 
 Notice how sensible this update is. If the model under-predicts ($e_{ui} > 0$), the user vector moves *toward* the item vector and the item vector toward the user vector, so their dot product grows. If it over-predicts, they move apart.
 
-**Worked example 1: one SGD step.** Let $x_u = (2.0,\ 1.0)$, $y_i = (1.5,\ 0.5)$, true rating $r_{ui} = 5$, learning rate $\gamma = 0.05$ and, to keep the arithmetic readable, $\lambda = 0$.
-
-1. Prediction: $2.0 \times 1.5 + 1.0 \times 0.5 = 3.5$.
-2. Error: $e = 5 - 3.5 = 1.5$.
-3. New user vector: $x_u' = (2.0 + 0.05 \cdot 1.5 \cdot 1.5,\ 1.0 + 0.05 \cdot 1.5 \cdot 0.5) = (2.1125,\ 1.0375)$.
-4. New item vector, using the *old* $x_u$: $y_i' = (1.5 + 0.05 \cdot 1.5 \cdot 2.0,\ 0.5 + 0.05 \cdot 1.5 \cdot 1.0) = (1.65,\ 0.575)$.
-5. New prediction: $2.1125 \times 1.65 + 1.0375 \times 0.575 \approx 4.08$.
-
-The error shrank from 1.5 to about 0.92 in a single step. Repeat that for millions of observed ratings, several times over, and the vectors settle. This is essentially the procedure that Simon Funk published during the Netflix Prize, and it is the reason you will hear the method called "Funk SVD", although it is not a true singular value decomposition: a true SVD needs every cell present, and here we deliberately ignore the empty ones.
+**Worked example 1: one SGD step.** Let $x_u = (2.0, 1.0)$, $y_i = (1.5, 0.5)$, $r_{ui} = 5$, $\gamma = 0.05$, $\lambda = 0$. The prediction is $3.5$, so $e = 1.5$. Then $x_u' = (2.1125, 1.0375)$ and, using the old $x_u$, $y_i' = (1.65, 0.575)$. The new prediction is $2.1125 \times 1.65 + 1.0375 \times 0.575 \approx 4.08$. The error shrank from 1.5 to about 0.92 in a single step. Repeat that for millions of observed ratings, several times over, and the vectors settle. This is essentially the procedure that Simon Funk published during the Netflix Prize, and it is the reason you will hear the method called "Funk SVD", although it is not a true singular value decomposition: a true SVD needs every cell present, and here we deliberately ignore the empty ones.
 
 ::: fact
 **Skipping the empty cells.** When Simon Funk described his approach in December 2006, the Netflix training data was a matrix of roughly 500,000 users by 17,000 movies, about 8.5 billion cells, of which only one in eighty-five held a rating. His key trick was to skip the empty cells entirely and run gradient descent on the observed ones, which let a laptop make a full training pass over 100 million ratings in seconds.
@@ -145,17 +124,7 @@ $$Y^{\top} C^u Y = Y^{\top} Y + Y^{\top} \left( C^u - I \right) Y .$$
 
 The first term, the **Gram matrix** $Y^{\top}Y$, does not depend on the user, so it is computed once per sweep. The second term has non-zero entries only for the $n_u$ items the user actually touched (where $c_{ui} - 1 = \alpha R_{ui} > 0$), so it costs $O(f^2 n_u)$. Likewise the right-hand side collapses to a sum over the user's touched items because $p_{ui} = 0$ elsewhere. The total cost of a sweep is therefore proportional to the number of *observed* cells, not to $m \times n$, which is what makes ALS practical on real data.
 
-**Worked example 2: one ALS solve by hand.** To keep numbers tiny we use $f = 1$ factor, so every vector is a scalar. A user has touched two items with $R = 1$ and $R = 2$. Item factors are $y = (1, 2, 3)$ for items 1, 2, 3, and item 3 is *not* touched. Take $\alpha = 2$ and $\lambda = 0.5$.
-
-1. Preferences: $p = (1, 1, 0)$.
-2. Confidences: $c = 1 + 2R = (3, 5, 1)$.
-3. Gram term: $Y^{\top}Y = 1 + 4 + 9 = 14$.
-4. Correction term: $Y^{\top}(C - I)Y = 2 \cdot 1^2 + 4 \cdot 2^2 = 2 + 16 = 18$ (the untouched item contributes $c - 1 = 0$).
-5. Left side: $14 + 18 + 0.5 = 32.5$. As a check, summing $c\, y^2 + \lambda$ directly gives $3 \cdot 1 + 5 \cdot 4 + 1 \cdot 9 + 0.5 = 32.5$. The Gram split saved us nothing here, but with 2,000 items it would save almost everything.
-6. Right side: $\sum c\, p\, y = 3 \cdot 1 \cdot 1 + 5 \cdot 1 \cdot 2 + 1 \cdot 0 \cdot 3 = 13$.
-7. Solution: $x_u = 13 / 32.5 = 0.4$.
-
-Predictions follow: $0.4 \times (1, 2, 3) = (0.4,\ 0.8,\ 1.2)$ for the three items. The two touched items have targets of 1 but only reach 0.4 and 0.8. With $\lambda$ small and one factor the model cannot satisfy everyone, and the untouched item 3 is *predicted high* because its factor is large. In a real model with 32 dimensions and a dozen touched items per user, the extra freedom lets the fit be much tighter. The lesson to take from the arithmetic is the structure: a single user is a small ridge regression whose rows are the items they touched.
+**Worked example 2: one ALS solve by hand.** Take $f = 1$ factor, item factors $y = (1, 2, 3)$, a user who touched items 1 and 2 with $R = (1, 2)$ (item 3 untouched), $\alpha = 2$, $\lambda = 0.5$. Then $p = (1,1,0)$ and $c = (3,5,1)$. The Gram term is $Y^{\top}Y = 14$, the correction is $Y^{\top}(C-I)Y = 2\cdot1 + 4\cdot4 = 18$, so the left side is $14 + 18 + 0.5 = 32.5$ (summing $c\,y^2 + \lambda$ directly gives the same). The right side is $\sum c\,p\,y = 3 + 10 = 13$, so $x_u = 13/32.5 = 0.4$ and the predictions are $(0.4, 0.8, 1.2)$. With one factor the model cannot satisfy everyone, which is why real models use 32; the structure to remember is that one user is a small weighted ridge regression over the items they touched.
 
 ```mermaid
 flowchart TD
@@ -192,19 +161,6 @@ The scalar $s$ is the key. When the pair is already ordered correctly by a wide 
 
 One practical detail. At initialisation all vectors are close to zero, so every gap is close to 0 and $\sigma(0) = 0.5$, meaning every triple has loss $-\ln 0.5 = \ln 2 \approx 0.693$. When you train BPR, a loss that *starts* near 0.693 is a good sign that the code is wired correctly.
 
-```mermaid
-flowchart LR
-    A["Pick an observed pair (u, i)"] --> B["Draw a random item j"]
-    B --> C{"j already clicked by u?"}
-    C -- yes --> B
-    C -- no --> D["gap = x_u . (y_i - y_j)"]
-    D --> E["s = sigmoid(-gap)"]
-    E --> F["Move x_u, y_i up and y_j down<br/>proportional to s"]
-    F --> A
-```
-
-*Figure: The BPR inner loop. The step size automatically shrinks for pairs the model already ranks correctly.*
-
 ### Hyperparameters in one place
 
 - `factors` $f$: too low underfits (tastes cannot be separated), too high overfits and slows training.
@@ -238,13 +194,9 @@ symbol: als_implicit
 
 Read the function top to bottom, and match each piece to the derivation.
 
-- `P = (R > 0)` and `C = 1.0 + alpha * R` are the preference and confidence matrices, exactly as defined above.
-- `X` and `Y` start as small Gaussian noise (standard deviation 0.1). Starting at exactly zero would be a bug: all vectors would be identical and the solves would stay symmetric.
-- The inner function `solve(fixed, conf, pref)` is the closed-form solve for **every row** of one side. `gram = fixed.T @ fixed` is the Gram matrix $Y^{\top}Y$, computed once per sweep and reused for every row; that line *is* the Hu-Koren-Volinsky trick.
-- For each row, `nz = np.flatnonzero(conf[r] > 1.0)` finds the touched items. `Fn = fixed[nz]` stacks their vectors, and `cu = conf[r, nz]` holds their confidences.
-- `A = gram + Fn.T @ ((cu - 1.0)[:, None] * Fn) + eye` is $Y^{\top}Y + Y^{\top}(C^u - I)Y + \lambda I$. The `(cu - 1.0)` factor is the diagonal of $C^u - I$.
-- `b = Fn.T @ (cu * pref[r, nz])` is $Y^{\top} C^u p(u)$.
-- `np.linalg.solve(A, b)` solves the linear system. We never form an explicit inverse; that is both faster and numerically safer.
+- `P` and `C` are the preference and confidence matrices; `X` and `Y` start as small Gaussian noise (all-zero would keep every solve identical).
+- `solve(fixed, conf, pref)` is the closed-form solve for every row of one side. `gram = fixed.T @ fixed` is $Y^{\top}Y$, computed once per sweep: that line *is* the Hu-Koren-Volinsky trick.
+- Per row, `nz` finds the touched items, `A = gram + Fn.T @ ((cu - 1.0)[:, None] * Fn) + eye` is $Y^{\top}Y + Y^{\top}(C^u - I)Y + \lambda I$, and `b` is $Y^{\top}C^u p(u)$. `np.linalg.solve(A, b)` avoids forming an inverse.
 
 The main loop then calls `solve(Y, C, P)` for the users and `solve(X, C.T, P.T)` for the items. Transposing $C$ and $P$ is all it takes to reuse the same function for the other side. After each sweep the code records the full objective with dense numpy operations, `(C * err**2).sum() + reg * (...)`, which is the loss plotted later.
 
@@ -259,13 +211,9 @@ symbol: bpr
 
 The function maps to the BPR equations one-to-one.
 
-- `users, items = np.nonzero(pos_mask)` lists every observed positive pair. One *epoch* visits every positive once, in a fresh random order, in mini-batches of 256.
-- `j = rng.integers(0, n_i, len(b))` draws one uniform random item per positive. The `for _retry` loop rejects the ones that happen to be real positives and redraws, up to five times. This is a cheap approximation of "sample from unobserved items".
-- `gap = (xu * (yi - yj)).sum(1)` is $\hat{x}_{uij}$ for the whole batch at once.
-- `sig = 1.0 / (1.0 + np.exp(gap))` is $\sigma(-\hat{x}_{uij}) = s$. The comment in the source says the same: this is $1 - \sigma(\text{gap})$, which equals $-\partial\,\text{loss}/\partial\,\text{gap}$.
-- `total += np.log1p(np.exp(-gap)).sum()` accumulates the loss $-\ln\sigma(\text{gap}) = \ln(1 + e^{-\text{gap}})$. Using `log1p` avoids losing precision when the exponent is tiny.
-- `gu`, `gi`, `gj` are the three gradients. The minus sign on `gj` is the push-away from the negative.
-- `np.add.at(X, u, lr * gu)` applies the updates. `np.add.at` rather than `X[u] += ...` matters: the same user can appear several times in a batch, and plain fancy-indexed assignment would silently keep only one of the updates.
+- `np.nonzero(pos_mask)` lists every positive pair; one epoch visits each once in mini-batches of 256. `j` is a uniform random item, redrawn up to five times if it is a real positive.
+- `gap` is $\hat{x}_{uij}$ for the batch; `sig = 1.0 / (1.0 + np.exp(gap))` is $\sigma(-\text{gap})$, the step multiplier $s$; `np.log1p(np.exp(-gap))` accumulates the loss.
+- `gu`, `gi`, `gj` are the three gradients (the minus sign on `gj` pushes the negative away). `np.add.at` is needed because a user can appear several times in a batch.
 
 ### From scores to a top-50 list
 
@@ -274,9 +222,7 @@ path: book/code/dense_recs.py
 symbol: scores_to_recs
 ```
 
-Both factor models produce a dense `users × items` score matrix, `X[users] @ Y[items].T`. This shared helper turns it into the "top 50 per user" format that `common.evaluate` expects. Only scores above zero count as "the model has an opinion". A user with no usable history (nobody to build a vector from) falls back to 7-day popularity, and the helper reports how often that happened. We will see the numbers in the output below.
-
-Notice what the helper does *not* do: it does not remove items the user already touched. Chapter 11 is where filters such as "already bought" belong; here we want the pure model.
+Both models produce a dense `users × items` score matrix, `X[users] @ Y[items].T`; this helper turns it into the top-50 lists `common.evaluate` expects, padding users without usable history with 7-day popularity. It does not remove items the user already touched; that filter belongs to Chapter 11.
 
 ## Run it
 
@@ -312,17 +258,13 @@ file: results/ch06_mf.txt
 lines: 57-65
 ```
 
-::: try
-Open `book/code/ch06_mf.py`, change `alpha=20.0` in the `als_implicit` signature to `alpha=1.0`, run it again, and compare the `als_implicit` row with the one above. The hands-on exercise at the end of the chapter asks you to predict what you will see.
-:::
-
 ## Results
 
 ### Reading the loss curves
 
 ![Implicit ALS: weighted squared loss plus regularisation per iteration. The first alternating sweep removes most of the loss, then the curve flattens.](../assets/charts/ch06-als-loss.png)
 
-The ALS curve is the classic shape of an alternating optimiser. Iteration 1 ends at 225190.5. A single further sweep brings it down to 147262.9 (a drop of about a third), and by iteration 5 it is at 120478.2. After that, each iteration buys very little: iteration 14 ends at 111911.5 and iteration 15 at 111705.9, a change of roughly 0.2%. Two things are worth noticing. The loss falls on **every** single iteration, as our derivation promised: each exact solve cannot raise the objective. And the curve is flattening, so 15 iterations is sensibly past the knee. Running 50 would cost three times the time for a change you could not see on the chart.
+The ALS loss falls on **every** iteration, as the derivation promised: from 225190.5 at iteration 1 to 147262.9 at iteration 2, 120478.2 at iteration 5, and 111911.5 then 111705.9 at iterations 14 and 15 (about 0.2% apart). The curve has flattened, so 15 iterations is past the knee.
 
 ![BPR: mean pairwise loss per epoch. It starts near ln 2 and decreases slowly at first, then quickly, then slowly again.](../assets/charts/ch06-bpr-loss.png)
 
@@ -344,17 +286,15 @@ lines: 22-22
 
 A few conclusions follow directly from the numbers.
 
-**1. Factorisation crushes global popularity.** Implicit ALS has an ndcg@20 of 0.1581, against 0.0475 for `pop_7d`: more than three times higher. Every personalised method in this book beats the popularity row, and that gap is the whole reason recommenders exist.
+**1. Factorisation crushes popularity.** ALS has ndcg@20 0.1581 against 0.0475 for `pop_7d`, more than three times higher.
 
-**2. ALS beats BPR here, but the comparison is not final.** ALS reaches 0.1581 ndcg@20 and a recall@20 of 0.2715; BPR gets 0.1379 and 0.2218. We have just seen BPR's loss still decreasing, and it also has more moving parts (learning rate, sampling, number of epochs). The honest summary is "with these defaults, ALS is better and cheaper", not "ALS is always better than BPR". In published comparisons BPR's strength is on datasets where optimising order matters more than reconstructing values.
+**2. ALS beats BPR here, but not conclusively.** ALS gets 0.1581 ndcg@20 and 0.2715 recall@20; BPR gets 0.1379 and 0.2218. BPR's loss was still falling and it has more knobs, so read this as "with these defaults ALS is better and cheaper".
 
-**3. ALS is not the winner of the neighbourhood methods.** User-kNN with 50 neighbours has a higher ndcg@20 (0.1662) than ALS (0.1581), and even the humble `pop_in_my_categories` baseline from Chapter 3 reaches 0.1302, not far below BPR's 0.1379. A well-tuned neighbourhood method on a catalogue this small is a strong baseline, and category affinity alone captures a lot of what the factors are learning.
+**3. ALS does not beat user-kNN on ndcg.** User-kNN with 50 neighbours reaches 0.1662, and even `pop_in_my_categories` reaches 0.1302, close to BPR's 0.1379. On a small catalogue, neighbourhood and category signals are strong baselines.
 
-**4. But the metrics disagree in an informative way.** ALS has a *higher* recall@20 (0.2715) than user-kNN (0.2273), and a higher order_recall@20 (0.4122 against 0.3456), yet a *lower* ndcg@20. Recall@20 counts how many of the user's future items appear anywhere in the top 20. NDCG additionally rewards putting them near the top. ALS therefore finds more of the right items but sorts them less sharply than user-kNN does. That pattern is typical of a retrieval-style model and it is exactly why the later chapters add a ranking stage on top: a candidate generator should be judged by recall, a ranker by ndcg.
+**4. The metrics disagree informatively.** ALS has higher recall@20 (0.2715 vs 0.2273) and order_recall@20 (0.4122 vs 0.3456) than user-kNN but lower ndcg@20. It finds more of the right items and sorts them less sharply, which is why a candidate generator is judged by recall and a ranker by ndcg.
 
-**5. Coverage is a quiet strength.** Both models recommend a far more varied set of items than popularity: coverage@20 of 0.5431 for ALS and 0.4267 for BPR, compared with 0.0087 for `pop_7d`. User-kNN reaches 0.4158, so ALS covers more of the catalogue while also achieving higher recall.
-
-**6. Cold users still need a fallback.** 28 of the evaluation users had no model scores at all, because they have no interactions before the cutoff and therefore no learned vector. They were filled with 7-day popularity, which accounts for about 3.0% of the recommendation slots. Matrix factorisation cannot score a user it has never seen; that is the cold-start theme of Chapter 12.
+**5. Coverage and cold users.** Coverage@20 is 0.5431 for ALS and 0.4267 for BPR against 0.0087 for `pop_7d`. But 28 evaluation users had no vector (no pre-cutoff interactions) and were padded with 7-day popularity, about 3.0% of slots: factorisation cannot score a user it has never seen (Chapter 12).
 
 ::: fact
 **A million dollars for ten percent.** The Netflix Prize launched in October 2006 and asked the world to improve Netflix's rating-prediction accuracy by 10%. It was awarded in September 2009 to the team "BellKor's Pragmatic Chaos", whose winning submission improved the existing system by 10.06%, reported as arriving less than half an hour before the contest deadline. The team's published description of its method highlighted two families of techniques: neighbourhood models and latent-factor models of the kind in this chapter.
@@ -368,34 +308,29 @@ Source: Sarno, Los Angeles Times, 2009
 Source: Rendle et al., UAI, 2009
 :::
 
-### What the factors buy you
-
-Factorisation is not a magic upgrade over neighbourhood methods on a small catalogue; user-kNN keeps its ndcg edge. What it gives is a **compact, learnable representation** of every user and item that can be indexed by approximate nearest-neighbour search (Chapter 7), fed to a ranker as a feature (Chapter 10) or extended with side information. In a multi-stage system the question is whether an ALS source raises the recall of the union (Chapter 8).
-
 ## Pitfalls and how it is done in production
 
 **Tuning on your test set.** Sweeping `alpha`, `factors` and `reg` against the evaluation labels fits the evaluation data. Tune on an earlier validation window and evaluate once on the test week; we left the defaults un-tuned for this reason.
 
-**Treating unobserved as negative.** ALS gives unobserved cells weight 1 and observed cells a larger weight, which is a soft version of the assumption, but it is still an assumption. A great item the user never saw is penalised during training. Uniform negative sampling in BPR has the same flaw: a random unclicked item could be a hidden favourite. Production systems mitigate it with *exposure-aware* negatives (items that were shown but ignored, the `impression` events) and with popularity-weighted sampling. This repository logs impressions precisely so that such negatives are available.
+**Unobserved is not negative.** ALS gives blanks weight 1 and BPR samples blanks uniformly, but a great item the user never saw is still penalised. Production systems use *exposure-aware* negatives (items shown but ignored, i.e. `impression` events, which this repo logs) and popularity-weighted sampling, since uniform sampling picks rare items as negatives far more often than popular ones.
 
-**Dense matrices do not scale.** Our teaching code builds dense $C$, $P$ and error matrices. At Shopee scale there are hundreds of millions of users and tens of millions of items, and nothing about that matrix is dense. Production implementations keep $R$ in compressed sparse form, process users in blocks that fit on a GPU, and shard $X$ and $Y$ across machines. The open-source `implicit` library and Spark's MLlib implement exactly the sparse form of the algorithm you just read.
+**Dense matrices do not scale.** Our code builds dense $C$, $P$ and error matrices. At Shopee scale production keeps $R$ sparse, processes users in GPU-sized blocks and shards $X$ and $Y$; the open-source `implicit` library and Spark MLlib implement the sparse form.
 
-**Fold-in for new activity.** With $Y$ frozen, a user's vector is a closed-form solve, so it can be recomputed in under a millisecond from their latest clicks, which is how nightly-trained models get fresh signals (compare this repository's on-request design).
+**Fold-in.** With $Y$ frozen, a user's vector is a closed-form solve, recomputable in well under a millisecond from their latest clicks, so a nightly-trained model can still react to fresh behaviour (compare this repo's on-request design).
 
-**Dot product, not distance.** Predictions use $x_u \cdot y_i$, so vector length matters; ANN libraries need a maximum-inner-product variant (Chapter 7).
+**Dot product, not distance.** Vector length matters for $x_u \cdot y_i$; ANN libraries need a maximum-inner-product variant (Chapter 7).
 
-**Where it sits in this repository.** The Python recommender service in this repo does not use ALS or BPR today; its candidate sources are the four retrievers from Chapter 8 and its ranker is LightGBM (Chapter 10). A natural, low-risk extension is to train an ALS model offline during retrain, store the user and item vectors, and use their dot product as an additional candidate source and as a *feature* for the ranker. Chapter 14 lists that in the "what to build next" checklist. Nothing in the service would need to change shape: `Store.snapshot()` already exposes everything the training function needs.
+**Where it sits in this repository.** The recommender service does not use ALS or BPR today: its sources are the four retrievers of Chapter 8 and its ranker is LightGBM (Chapter 10). A natural extension is to train ALS during retrain and use the dot product as an extra candidate source and as a ranker feature (see the checklist in Chapter 14).
 
 ## Summary
 
-- Matrix factorisation gives every user and item a short vector of **latent factors**, and scores a pair with their dot product. It compresses a sparse matrix of three million cells into roughly a hundred thousand parameters and generalises across items nobody co-clicked.
-- Classic explicit factorisation (Funk SVD) minimises squared error on observed ratings by SGD. It is not appropriate for clicks, because empty cells are not ratings of 0 and non-empty cells measure confidence rather than preference.
-- **Implicit ALS** splits each cell into a binary preference $p = 1[R > 0]$ and a confidence $c = 1 + \alpha R$, and minimises the confidence-weighted squared error over *all* cells.
-- With one side fixed, each row has a closed-form solve, $x_u = (Y^{\top}C^uY + \lambda I)^{-1}Y^{\top}C^u p(u)$. Precomputing the Gram matrix $Y^{\top}Y$ makes a sweep cost proportional to the observed cells, and every solve can only decrease the loss.
-- **BPR** trains on triples (user, clicked item, random item) to push the clicked item's score above the other, with gradient scaled by $\sigma(-\text{gap})$. It optimises ordering directly; a healthy run starts near $\ln 2 \approx 0.693$.
-- On this book's data, ALS reached ndcg@20 of 0.1581 and BPR 0.1379, far above `pop_7d` at 0.0475. ALS had higher recall@20 than user-kNN, but user-kNN's 0.1662 ndcg@20 was still higher: factorisation is a retrieval model, not a sharp ranker.
-- Users without history get no vector at all: 28 evaluation users needed popularity padding, which is why cold start is a separate problem.
-- The real value of factors is the *representation*: it can be indexed, reused as a ranker feature, and extended, which is where Chapter 7 takes it next.
+- Matrix factorisation gives each user and item a short vector of **latent factors** and scores a pair by their dot product, compressing about three million cells into roughly a hundred thousand parameters.
+- Explicit factorisation (Funk SVD) fits observed ratings by SGD; it is a poor fit for clicks, where blanks are not zeros and weights express confidence.
+- **Implicit ALS** splits each cell into preference $p = 1[R > 0]$ and confidence $c = 1 + \alpha R$ and minimises the weighted squared error over all cells.
+- With one side fixed each row has a closed-form solve, $x_u = (Y^{\top}C^uY + \lambda I)^{-1}Y^{\top}C^u p(u)$; the Gram trick makes a sweep cost proportional to observed cells, and the loss falls on every iteration.
+- **BPR** pushes a clicked item above a random one, with gradient scaled by $\sigma(-\text{gap})$; a healthy run starts near $\ln 2 \approx 0.693$.
+- ALS reached ndcg@20 of 0.1581 and BPR 0.1379 against 0.0475 for `pop_7d`; user-kNN's 0.1662 is still higher, although ALS has higher recall@20, so factorisation is a retrieval model, not a sharp ranker.
+- 28 evaluation users had no vector and needed popularity padding; the lasting value of factors is the representation, which Chapter 7 takes further.
 
 ## Quiz
 
